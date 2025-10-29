@@ -1,0 +1,43 @@
+# ezMIgrations Configuration
+
+# Entity Framework Core settings
+ef_core:
+  # Command to add a new migration
+  # {migration_name} will be replaced with the actual migration name
+  add_command: "dotnet ef migrations add {migration_name}"
+  
+  # Command to update database to a specific migration
+  # {migration_name} will be replaced with the target migration name
+  update_command: "dotnet ef database update {migration_name}"
+  
+  # Command to remove the last migration
+  remove_command: "dotnet ef migrations remove"
+
+# Squashed migration settings
+squashed_migration:
+  # Name for the new squashed migration
+  name: "SquashedMigration"
+  
+  # Namespace for the squashed migration (will use detected namespace if empty)
+  namespace: ""
+  
+  # Whether to backup original migrations before deleting
+  backup_migrations: true
+  
+  # Directory to store backups (relative to migrations folder)
+  backup_directory: "../migrations_backup"
+
+# Processing options
+options:
+  # Whether to sort migrations chronologically before processing
+  sort_migrations: true
+  
+  # Whether to prompt for confirmation before deleting migrations
+  confirm_deletion: true
+  
+  # Whether to run database rollback before squashing
+  rollback_database: true
+  
+  # Dry run mode - show what would happen without making changes
+  dry_run: false
+

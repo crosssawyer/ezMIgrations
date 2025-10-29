@@ -1,4 +1,11 @@
 # ezMIgrations Requirements
-# No external dependencies required - uses only Python standard library
+
+# Runtime dependencies
+PyYAML>=6.0  # For configuration file support
+
+# Testing dependencies
+pytest>=7.0.0
+
+
 
 

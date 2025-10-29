@@ -11,4 +11,6 @@ class StoredProcedure:
         self.latest_up_method = new_up_method
     
     def update_down_method(self, new_down_method: str) -> None:
-        self.oldest_down_method = new_down_method
+        # Only update if empty (preserve the oldest/first down method)
+        if not self.oldest_down_method:
+            self.oldest_down_method = new_down_method
