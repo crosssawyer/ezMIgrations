@@ -7,6 +7,14 @@ dist/
 # Rust
 src-tauri/target/
 
+# Tauri generated
+src-tauri/gen/
+src-tauri/icons/
+
+# Lock files (regenerated on install/build)
+package-lock.json
+src-tauri/Cargo.lock
+
 # Environment
 .env
 .env.*
@@ -20,8 +28,3 @@ src-tauri/target/
 # OS
 .DS_Store
 Thumbs.db
-
-# Old Python artifacts
-venv/
-__pycache__/
-*.pyc

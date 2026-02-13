@@ -19,25 +19,44 @@ pub struct ProjectInfo {
     pub branch: String,
 }
 
+fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("project_config.json"))
+}
+
 #[tauri::command]
-pub fn set_project(
+pub async fn set_project(
+    app: AppHandle,
     state: State<'_, AppState>,
     project_path: String,
     db_context: String,
     startup_project: String,
 ) -> Result<ProjectInfo, String> {
-    // Validate path exists
     if !Path::new(&project_path).exists() {
         return Err(format!("Path does not exist: {}", project_path));
     }
 
-    let branch = GitService::get_current_branch(&project_path).unwrap_or_default();
+    let pp = project_path.clone();
+    let branch = tokio::task::spawn_blocking(move || {
+        GitService::get_current_branch(&pp).unwrap_or_default()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let config = ProjectConfig {
         project_path: project_path.clone(),
         db_context,
         startup_project,
     };
+
+    // Persist to disk
+    if let Some(config_path) = config_file_path(&app) {
+        if let Some(parent) = config_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string_pretty(&config) {
+            let _ = std::fs::write(&config_path, json);
+        }
+    }
 
     *state.config.lock().unwrap() = Some(config.clone());
     *state.current_branch.lock().unwrap() = branch.clone();
@@ -51,13 +70,59 @@ pub fn set_project(
 }
 
 #[tauri::command]
-pub fn get_project(state: State<'_, AppState>) -> Result<Option<ProjectInfo>, String> {
-    let config = state.config.lock().unwrap();
-    let branch = state.current_branch.lock().unwrap().clone();
-    Ok(config.as_ref().map(|c| ProjectInfo {
-        path: c.project_path.clone(),
-        db_context: c.db_context.clone(),
-        startup_project: c.startup_project.clone(),
+pub async fn get_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<ProjectInfo>, String> {
+    // If config is already in memory, return it
+    {
+        let config = state.config.lock().unwrap();
+        if config.is_some() {
+            let branch = state.current_branch.lock().unwrap().clone();
+            return Ok(config.as_ref().map(|c| ProjectInfo {
+                path: c.project_path.clone(),
+                db_context: c.db_context.clone(),
+                startup_project: c.startup_project.clone(),
+                branch,
+            }));
+        }
+    }
+
+    // Try loading from disk
+    let config_path = match config_file_path(&app) {
+        Some(p) if p.exists() => p,
+        _ => return Ok(None),
+    };
+
+    let json = match std::fs::read_to_string(&config_path) {
+        Ok(j) => j,
+        Err(_) => return Ok(None),
+    };
+
+    let config: ProjectConfig = match serde_json::from_str(&json) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),
+    };
+
+    // Validate path still exists
+    if !Path::new(&config.project_path).exists() {
+        return Ok(None);
+    }
+
+    let pp = config.project_path.clone();
+    let branch = tokio::task::spawn_blocking(move || {
+        GitService::get_current_branch(&pp).unwrap_or_default()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    *state.config.lock().unwrap() = Some(config.clone());
+    *state.current_branch.lock().unwrap() = branch.clone();
+
+    Ok(Some(ProjectInfo {
+        path: config.project_path,
+        db_context: config.db_context,
+        startup_project: config.startup_project,
         branch,
     }))
 }
@@ -65,99 +130,129 @@ pub fn get_project(state: State<'_, AppState>) -> Result<Option<ProjectInfo>, St
 // ─── Migration Commands ─────────────────────────────────────────────
 
 #[tauri::command]
-pub fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration>, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration>, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let ef_migrations = DotnetEf::list_migrations(
-        &config.project_path,
-        &config.db_context,
-        &config.startup_project,
-    )?;
+    let migrations = tokio::task::spawn_blocking(move || {
+        let ef_migrations = DotnetEf::list_migrations(
+            &config.project_path,
+            &config.db_context,
+            &config.startup_project,
+        )?;
 
-    let mut migrations: Vec<Migration> = Vec::new();
+        let mut migrations: Vec<Migration> = Vec::new();
 
-    for (name, applied) in &ef_migrations {
-        let file_path =
-            MigrationParser::get_migration_file(&config.project_path, name);
+        for (name, applied) in &ef_migrations {
+            let file_path =
+                MigrationParser::get_migration_file(&config.project_path, name);
 
-        let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(ref fp) = file_path {
-            match MigrationParser::parse_file(fp) {
-                Ok(parsed) => (
-                    parsed.has_custom_sql,
-                    parsed.custom_sql_up,
-                    parsed.custom_sql_down,
-                ),
-                Err(_) => (false, Vec::new(), Vec::new()),
-            }
-        } else {
-            (false, Vec::new(), Vec::new())
-        };
+            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(ref fp) = file_path {
+                match MigrationParser::parse_file(fp) {
+                    Ok(parsed) => (
+                        parsed.has_custom_sql,
+                        parsed.custom_sql_up,
+                        parsed.custom_sql_down,
+                    ),
+                    Err(_) => (false, Vec::new(), Vec::new()),
+                }
+            } else {
+                (false, Vec::new(), Vec::new())
+            };
 
-        migrations.push(Migration {
-            id: name.clone(),
-            name: name.clone(),
-            applied: *applied,
-            has_custom_sql,
-            custom_sql_up,
-            custom_sql_down,
-            file_path: file_path.map(|p| p.to_string_lossy().to_string()),
-        });
-    }
+            migrations.push(Migration {
+                id: name.clone(),
+                name: name.clone(),
+                applied: *applied,
+                has_custom_sql,
+                custom_sql_up,
+                custom_sql_down,
+                file_path: file_path.map(|p| p.to_string_lossy().to_string()),
+            });
+        }
+
+        Ok::<Vec<Migration>, String>(migrations)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     *state.migrations.lock().unwrap() = migrations.clone();
     Ok(migrations)
 }
 
 #[tauri::command]
-pub fn add_migration(state: State<'_, AppState>, name: String) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+pub async fn add_migration(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let result = DotnetEf::add_migration(
-        &config.project_path,
-        &name,
-        &config.db_context,
-        &config.startup_project,
-    )?;
+    let result = tokio::task::spawn_blocking(move || {
+        DotnetEf::add_migration(
+            &config.project_path,
+            &name,
+            &config.db_context,
+            &config.startup_project,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if result.success {
-        Ok(format!("Migration '{}' created successfully", name))
+        Ok(format!("Migration created successfully"))
     } else {
-        Err(format!("Failed to create migration: {}", result.stderr))
+        Err(format!("Failed to create migration: {}", result.error_output()))
     }
 }
 
 #[tauri::command]
-pub fn remove_migration(state: State<'_, AppState>, force: bool) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+pub async fn remove_migration(state: State<'_, AppState>, force: bool) -> Result<String, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let result = DotnetEf::remove_migration(
-        &config.project_path,
-        &config.db_context,
-        &config.startup_project,
-        force,
-    )?;
+    let result = tokio::task::spawn_blocking(move || {
+        DotnetEf::remove_migration(
+            &config.project_path,
+            &config.db_context,
+            &config.startup_project,
+            force,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if result.success {
         Ok("Last migration removed successfully".to_string())
     } else {
-        Err(format!("Failed to remove migration: {}", result.stderr))
+        Err(format!("Failed to remove migration: {}", result.error_output()))
     }
 }
 
 #[tauri::command]
-pub fn update_database(state: State<'_, AppState>, target: String) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+pub async fn update_database(
+    state: State<'_, AppState>,
+    target: String,
+) -> Result<String, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let result = DotnetEf::update_database(
-        &config.project_path,
-        &target,
-        &config.db_context,
-        &config.startup_project,
-    )?;
+    let target_clone = target.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        DotnetEf::update_database(
+            &config.project_path,
+            &target_clone,
+            &config.db_context,
+            &config.startup_project,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if result.success {
         if target.is_empty() {
@@ -166,30 +261,41 @@ pub fn update_database(state: State<'_, AppState>, target: String) -> Result<Str
             Ok(format!("Database updated to migration: {}", target))
         }
     } else {
-        Err(format!("Failed to update database: {}", result.stderr))
+        Err(format!("Failed to update database: {}", result.error_output()))
     }
 }
 
 #[tauri::command]
-pub fn get_migration_sql(
+pub async fn get_migration_sql(
     state: State<'_, AppState>,
     migration_name: String,
 ) -> Result<MigrationSqlInfo, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let file_path = MigrationParser::get_migration_file(&config.project_path, &migration_name)
-        .ok_or("Migration file not found")?;
+    tokio::task::spawn_blocking(move || {
+        let file_path = MigrationParser::get_migration_file(&config.project_path, &migration_name)
+            .ok_or_else(|| {
+                format!(
+                    "Migration file not found for '{}' in project '{}'",
+                    migration_name, config.project_path
+                )
+            })?;
 
-    let parsed = MigrationParser::parse_file(&file_path)?;
+        let parsed = MigrationParser::parse_file(&file_path)?;
 
-    Ok(MigrationSqlInfo {
-        name: parsed.file_name,
-        up_body: parsed.up_body,
-        down_body: parsed.down_body,
-        custom_sql_up: parsed.custom_sql_up,
-        custom_sql_down: parsed.custom_sql_down,
+        Ok(MigrationSqlInfo {
+            name: parsed.file_name,
+            up_body: parsed.up_body,
+            down_body: parsed.down_body,
+            custom_sql_up: parsed.custom_sql_up,
+            custom_sql_down: parsed.custom_sql_down,
+        })
     })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
@@ -204,170 +310,192 @@ pub struct MigrationSqlInfo {
 // ─── Squash Command ─────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn squash_migrations(
+pub async fn squash_migrations(
     state: State<'_, AppState>,
     from_migration: String,
     to_migration: String,
     new_name: String,
 ) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
-
-    // 1. Collect all custom SQL from migrations in the range
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
     let migrations = state.migrations.lock().unwrap().clone();
 
-    let mut in_range = false;
-    let mut all_custom_sql: Vec<String> = Vec::new();
-    let mut migrations_to_remove: Vec<String> = Vec::new();
+    let result = tokio::task::spawn_blocking(move || {
+        // 1. Collect all custom SQL from migrations in the range
+        let mut in_range = false;
+        let mut all_custom_sql: Vec<String> = Vec::new();
+        let mut migrations_to_remove: Vec<String> = Vec::new();
 
-    for m in &migrations {
-        if m.name == from_migration {
-            in_range = true;
+        for m in &migrations {
+            if m.name == from_migration {
+                in_range = true;
+            }
+            if in_range {
+                all_custom_sql.extend(m.custom_sql_up.clone());
+                migrations_to_remove.push(m.name.clone());
+            }
+            if m.name == to_migration {
+                break;
+            }
         }
-        if in_range {
-            all_custom_sql.extend(m.custom_sql_up.clone());
-            migrations_to_remove.push(m.name.clone());
+
+        if migrations_to_remove.is_empty() {
+            return Err("No migrations found in the specified range".to_string());
         }
-        if m.name == to_migration {
-            break;
-        }
-    }
 
-    if migrations_to_remove.is_empty() {
-        return Err("No migrations found in the specified range".to_string());
-    }
+        // 2. Update database back to the migration before the range
+        let before_migration = migrations
+            .iter()
+            .take_while(|m| m.name != from_migration)
+            .last()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "0".to_string());
 
-    // 2. Update database back to the migration before the range
-    let before_migration = migrations
-        .iter()
-        .take_while(|m| m.name != from_migration)
-        .last()
-        .map(|m| m.name.clone())
-        .unwrap_or_else(|| "0".to_string());
-
-    let update_result = DotnetEf::update_database(
-        &config.project_path,
-        &before_migration,
-        &config.db_context,
-        &config.startup_project,
-    )?;
-
-    if !update_result.success {
-        return Err(format!(
-            "Failed to revert database for squash: {}",
-            update_result.stderr
-        ));
-    }
-
-    // 3. Remove migrations in reverse order
-    for _ in migrations_to_remove.iter().rev() {
-        let result = DotnetEf::remove_migration(
+        let update_result = DotnetEf::update_database(
             &config.project_path,
+            &before_migration,
             &config.db_context,
             &config.startup_project,
-            true,
         )?;
 
-        if !result.success {
+        if !update_result.success {
             return Err(format!(
-                "Failed to remove migration during squash: {}",
-                result.stderr
+                "Failed to revert database for squash: {}",
+                update_result.error_output()
             ));
         }
-    }
 
-    // 4. Create new squashed migration
-    let add_result = DotnetEf::add_migration(
-        &config.project_path,
-        &new_name,
-        &config.db_context,
-        &config.startup_project,
-    )?;
+        // 3. Remove migrations in reverse order
+        for _ in migrations_to_remove.iter().rev() {
+            let result = DotnetEf::remove_migration(
+                &config.project_path,
+                &config.db_context,
+                &config.startup_project,
+                true,
+            )?;
 
-    if !add_result.success {
-        return Err(format!(
-            "Failed to create squashed migration: {}",
-            add_result.stderr
-        ));
-    }
-
-    // 5. Inject captured custom SQL into the new migration
-    if !all_custom_sql.is_empty() {
-        if let Some(new_file) =
-            MigrationParser::get_migration_file(&config.project_path, &new_name)
-        {
-            MigrationParser::inject_custom_sql(&new_file, &all_custom_sql)?;
+            if !result.success {
+                return Err(format!(
+                    "Failed to remove migration during squash: {}",
+                    result.error_output()
+                ));
+            }
         }
-    }
 
-    // 6. Apply the new squashed migration
-    let final_update = DotnetEf::update_database(
-        &config.project_path,
-        "",
-        &config.db_context,
-        &config.startup_project,
-    )?;
+        // 4. Create new squashed migration
+        let add_result = DotnetEf::add_migration(
+            &config.project_path,
+            &new_name,
+            &config.db_context,
+            &config.startup_project,
+        )?;
 
-    if !final_update.success {
-        return Err(format!(
-            "Squash created but failed to apply: {}",
-            final_update.stderr
-        ));
-    }
+        if !add_result.success {
+            return Err(format!(
+                "Failed to create squashed migration: {}",
+                add_result.error_output()
+            ));
+        }
 
-    Ok(format!(
-        "Squashed {} migrations into '{}'. Custom SQL preserved: {} statements.",
-        migrations_to_remove.len(),
-        new_name,
-        all_custom_sql.len()
-    ))
+        // 5. Inject captured custom SQL into the new migration
+        if !all_custom_sql.is_empty() {
+            if let Some(new_file) =
+                MigrationParser::get_migration_file(&config.project_path, &new_name)
+            {
+                MigrationParser::inject_custom_sql(&new_file, &all_custom_sql)?;
+            }
+        }
+
+        // 6. Apply the new squashed migration
+        let final_update = DotnetEf::update_database(
+            &config.project_path,
+            "",
+            &config.db_context,
+            &config.startup_project,
+        )?;
+
+        if !final_update.success {
+            return Err(format!(
+                "Squash created but failed to apply: {}",
+                final_update.error_output()
+            ));
+        }
+
+        Ok(format!(
+            "Squashed {} migrations into '{}'. Custom SQL preserved: {} statements.",
+            migrations_to_remove.len(),
+            new_name,
+            all_custom_sql.len()
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    Ok(result)
 }
 
 // ─── Script Command ─────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn generate_script(
+pub async fn generate_script(
     state: State<'_, AppState>,
     from: String,
     to: String,
 ) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
-    let result = DotnetEf::script_migration(
-        &config.project_path,
-        &from,
-        &to,
-        &config.db_context,
-        &config.startup_project,
-    )?;
+    let result = tokio::task::spawn_blocking(move || {
+        DotnetEf::script_migration(
+            &config.project_path,
+            &from,
+            &to,
+            &config.db_context,
+            &config.startup_project,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     if result.success {
         Ok(result.stdout)
     } else {
-        Err(format!("Failed to generate script: {}", result.stderr))
+        Err(format!("Failed to generate script: {}", result.error_output()))
     }
 }
 
 // ─── Git / Branch Commands ──────────────────────────────────────────
 
 #[tauri::command]
-pub fn get_current_branch(state: State<'_, AppState>) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+pub async fn get_current_branch(state: State<'_, AppState>) -> Result<String, String> {
+    let project_path = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.project_path.clone()
+    };
 
-    let branch = GitService::get_current_branch(&config.project_path)?;
+    let branch = tokio::task::spawn_blocking(move || {
+        GitService::get_current_branch(&project_path)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
     *state.current_branch.lock().unwrap() = branch.clone();
     Ok(branch)
 }
 
 #[tauri::command]
-pub fn start_branch_watcher(
+pub async fn start_branch_watcher(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let config = state.config.lock().unwrap();
-    let config = config.as_ref().ok_or("No project configured")?;
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
 
     let head_path = GitService::get_head_path(&config.project_path)
         .ok_or("Could not find .git/HEAD")?;

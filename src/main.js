@@ -20,6 +20,7 @@ const detailPanel = $("#detail-panel");
 const emptyState = $("#empty-state");
 const loadingState = $("#loading-state");
 const modalOverlay = $("#modal-overlay");
+const operationOverlay = $("#operation-overlay");
 
 // ─── Init ───────────────────────────────────────────────────────────
 
@@ -48,6 +49,8 @@ function bindEvents() {
   $("#input-project-path").addEventListener("keydown", (e) => {
     if (e.key === "Enter") connectProject();
   });
+  $("#btn-browse-project").addEventListener("click", () => browseFolder("input-project-path"));
+  $("#btn-browse-startup").addEventListener("click", () => browseFolder("input-startup-project"));
 
   // Toolbar
   $("#btn-add").addEventListener("click", showAddModal);
@@ -78,6 +81,17 @@ function bindEvents() {
   modalOverlay.addEventListener("click", (e) => {
     if (e.target === modalOverlay) closeModal();
   });
+}
+
+// ─── Browse ─────────────────────────────────────────────────────────
+
+async function browseFolder(inputId) {
+  const selected = await invoke("plugin:dialog|open", {
+    options: { directory: true, multiple: false },
+  });
+  if (selected) {
+    $(`#${inputId}`).value = selected;
+  }
 }
 
 // ─── Project Setup ──────────────────────────────────────────────────
@@ -130,6 +144,7 @@ async function refreshMigrations() {
   loadingState.classList.remove("hidden");
   emptyState.classList.add("hidden");
   migrationTbody.innerHTML = "";
+  setToolbarDisabled(true);
 
   try {
     migrations = await invoke("list_migrations");
@@ -138,6 +153,7 @@ async function refreshMigrations() {
     toast("Failed to load migrations: " + err, "error");
   } finally {
     loadingState.classList.add("hidden");
+    setToolbarDisabled(false);
   }
 }
 
@@ -256,6 +272,26 @@ function switchTab(tabName) {
   $(`#detail-${tabName}`).classList.add("active");
 }
 
+// ─── Operation Overlay ──────────────────────────────────────────────
+
+function showOverlay(message) {
+  $("#operation-message").textContent = message;
+  operationOverlay.classList.remove("hidden");
+  setToolbarDisabled(true);
+}
+
+function hideOverlay() {
+  operationOverlay.classList.add("hidden");
+  setToolbarDisabled(false);
+}
+
+function setToolbarDisabled(disabled) {
+  ["#btn-add", "#btn-squash", "#btn-update-latest", "#btn-refresh"].forEach((sel) => {
+    const btn = $(sel);
+    if (btn) btn.disabled = disabled;
+  });
+}
+
 // ─── Actions ────────────────────────────────────────────────────────
 
 function showAddModal() {
@@ -271,12 +307,15 @@ function showAddModal() {
       return;
     }
     closeModal();
+    showOverlay("Adding migration...");
     try {
       const result = await invoke("add_migration", { name });
       toast(result, "success");
       await refreshMigrations();
     } catch (err) {
       toast(err, "error");
+    } finally {
+      hideOverlay();
     }
   });
 
@@ -317,7 +356,7 @@ function showSquashModal() {
       return;
     }
     closeModal();
-    toast("Squashing migrations...", "info");
+    showOverlay("Squashing migrations...");
     try {
       const result = await invoke("squash_migrations", {
         fromMigration: fromMigration.name,
@@ -329,6 +368,8 @@ function showSquashModal() {
       await refreshMigrations();
     } catch (err) {
       toast(err, "error");
+    } finally {
+      hideOverlay();
     }
   });
 
@@ -336,24 +377,28 @@ function showSquashModal() {
 }
 
 async function updateToLatest() {
+  showOverlay("Updating database...");
   try {
-    toast("Updating database...", "info");
     const result = await invoke("update_database", { target: "" });
     toast(result, "success");
     await refreshMigrations();
   } catch (err) {
     toast(err, "error");
+  } finally {
+    hideOverlay();
   }
 }
 
 async function applyUpTo(migration) {
+  showOverlay(`Updating to ${migration.name}...`);
   try {
-    toast(`Updating to ${migration.name}...`, "info");
     const result = await invoke("update_database", { target: migration.name });
     toast(result, "success");
     await refreshMigrations();
   } catch (err) {
     toast(err, "error");
+  } finally {
+    hideOverlay();
   }
 }
 
@@ -370,23 +415,29 @@ async function deleteMigration(migration) {
       </p>
     `, async () => {
       closeModal();
+      showOverlay("Removing migration...");
       try {
         const result = await invoke("remove_migration", { force: true });
         toast(result, "success");
         await refreshMigrations();
       } catch (err) {
         toast(err, "error");
+      } finally {
+        hideOverlay();
       }
     });
     return;
   }
 
+  showOverlay("Removing migration...");
   try {
     const result = await invoke("remove_migration", { force: false });
     toast(result, "success");
     await refreshMigrations();
   } catch (err) {
     toast(err, "error");
+  } finally {
+    hideOverlay();
   }
 }
 

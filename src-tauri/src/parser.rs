@@ -44,7 +44,14 @@ impl MigrationParser {
     fn find_migrations_dir(project_path: &str) -> Result<PathBuf, String> {
         let base = Path::new(project_path);
 
-        // Check common locations
+        // If project_path points to a .csproj file, use its parent directory
+        let base = if base.is_file() {
+            base.parent().unwrap_or(base)
+        } else {
+            base
+        };
+
+        // Check common locations within the project
         let candidates = [
             base.join("Migrations"),
             base.join("Data").join("Migrations"),
@@ -56,9 +63,17 @@ impl MigrationParser {
             }
         }
 
-        // Walk directory tree to find any Migrations folder
-        if let Some(found) = Self::walk_for_migrations(base, 3) {
+        // Search within the project directory
+        if let Some(found) = Self::walk_for_migrations(base, 5) {
             return Ok(found);
+        }
+
+        // Search sibling directories (common in multi-project solutions
+        // where migrations live in a separate project like cmms-data/)
+        if let Some(parent) = base.parent() {
+            if let Some(found) = Self::walk_for_migrations(parent, 3) {
+                return Ok(found);
+            }
         }
 
         Err(format!(

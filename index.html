@@ -24,7 +24,10 @@
         <h2>Configure Project</h2>
         <div class="form-group">
           <label for="input-project-path">Project Path</label>
-          <input type="text" id="input-project-path" placeholder="/path/to/your/dotnet/project" />
+          <div class="input-with-browse">
+            <input type="text" id="input-project-path" placeholder="/path/to/your/dotnet/project" />
+            <button id="btn-browse-project" class="btn btn-ghost" title="Browse...">Browse</button>
+          </div>
         </div>
         <div class="form-group">
           <label for="input-db-context">DbContext Name <span class="hint">(optional)</span></label>
@@ -32,7 +35,10 @@
         </div>
         <div class="form-group">
           <label for="input-startup-project">Startup Project <span class="hint">(optional)</span></label>
-          <input type="text" id="input-startup-project" placeholder="/path/to/startup/project" />
+          <div class="input-with-browse">
+            <input type="text" id="input-startup-project" placeholder="/path/to/startup/project" />
+            <button id="btn-browse-startup" class="btn btn-ghost" title="Browse...">Browse</button>
+          </div>
         </div>
         <button id="btn-set-project" class="btn btn-primary">Connect Project</button>
       </section>
@@ -65,6 +71,7 @@
             <p>No migrations found. Create one to get started.</p>
           </div>
           <div id="loading-state" class="hidden">
+            <div class="spinner"></div>
             <p>Loading migrations...</p>
           </div>
         </div>
@@ -103,6 +110,12 @@
             <button id="modal-confirm" class="btn btn-primary">Confirm</button>
           </div>
         </div>
+      </div>
+
+      <!-- Operation overlay (shown during long operations) -->
+      <div id="operation-overlay" class="hidden">
+        <div class="spinner spinner-lg"></div>
+        <p id="operation-message">Working...</p>
       </div>
 
       <!-- Toast notifications -->

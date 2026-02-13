@@ -10,6 +10,17 @@ pub struct CommandResult {
     pub stderr: String,
 }
 
+impl CommandResult {
+    /// Return the most useful error text: stderr if non-empty, otherwise stdout.
+    pub fn error_output(&self) -> &str {
+        if self.stderr.trim().is_empty() {
+            &self.stdout
+        } else {
+            &self.stderr
+        }
+    }
+}
+
 impl DotnetEf {
     fn run_ef(
         project_path: &str,
@@ -81,20 +92,48 @@ impl DotnetEf {
         let mut migrations = Vec::new();
         for line in result.stdout.lines() {
             let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with("Build") || trimmed.starts_with("Done") {
+            if trimmed.is_empty() {
                 continue;
             }
+
+            // Skip EF Core noise: warnings, errors, info, and known preamble lines
+            if trimmed.starts_with("Build")
+                || trimmed.starts_with("Done")
+                || trimmed.starts_with("The following")
+                || trimmed.starts_with("Using")
+                || trimmed.starts_with("Finding")
+                || trimmed.starts_with("warn:")
+                || trimmed.starts_with("info:")
+                || trimmed.starts_with("error:")
+                || trimmed.starts_with("fail:")
+                || trimmed.starts_with("An error")
+                || trimmed.starts_with("No store type")
+                || trimmed.contains("Microsoft.EntityFrameworkCore")
+                || trimmed.contains("provider:")
+                || trimmed.contains("silently truncated")
+                || trimmed.contains("HasColumnType")
+                || trimmed.contains("HasPrecision")
+                || trimmed.contains("HasConversion")
+                || trimmed.contains("NUMERIC_ROUNDABORT")
+                || trimmed.contains("network-related or instance-specific")
+            {
+                continue;
+            }
+
+            // EF Core migration names always start with a numeric timestamp (e.g. "20230101120000_InitialCreate")
+            let name_part = trimmed.replace("(Pending)", "");
+            let name_part = name_part.trim();
+            if name_part.is_empty() || !name_part.starts_with(|c: char| c.is_ascii_digit()) {
+                continue;
+            }
+
             // Applied migrations are listed normally, pending ones have "(Pending)" suffix
             if trimmed.contains("(Pending)") {
                 let name = trimmed.replace("(Pending)", "").trim().to_string();
                 if !name.is_empty() {
                     migrations.push((name, false));
                 }
-            } else if !trimmed.is_empty()
-                && !trimmed.starts_with("The following")
-                && !trimmed.starts_with("Using")
-                && !trimmed.starts_with("Finding")
-            {
+            } else {
                 migrations.push((trimmed.to_string(), true));
             }
         }
