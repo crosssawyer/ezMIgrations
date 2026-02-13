@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ezMigrations</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header id="header">
+        <div class="header-left">
+          <h1>ezMigrations</h1>
+        </div>
+        <div class="header-right">
+          <span id="branch-badge" class="badge hidden"></span>
+          <button id="btn-refresh" class="icon-btn" title="Refresh migrations">&#x21bb;</button>
+        </div>
+      </header>
+
+      <!-- Setup Panel (shown when no project is configured) -->
+      <section id="setup-panel" class="panel">
+        <h2>Configure Project</h2>
+        <div class="form-group">
+          <label for="input-project-path">Project Path</label>
+          <input type="text" id="input-project-path" placeholder="/path/to/your/dotnet/project" />
+        </div>
+        <div class="form-group">
+          <label for="input-db-context">DbContext Name <span class="hint">(optional)</span></label>
+          <input type="text" id="input-db-context" placeholder="ApplicationDbContext" />
+        </div>
+        <div class="form-group">
+          <label for="input-startup-project">Startup Project <span class="hint">(optional)</span></label>
+          <input type="text" id="input-startup-project" placeholder="/path/to/startup/project" />
+        </div>
+        <button id="btn-set-project" class="btn btn-primary">Connect Project</button>
+      </section>
+
+      <!-- Main Content (shown after project is configured) -->
+      <main id="main-content" class="hidden">
+        <!-- Toolbar -->
+        <div id="toolbar">
+          <button id="btn-add" class="btn btn-success" title="Add new migration">+ New</button>
+          <button id="btn-squash" class="btn btn-warning" title="Squash selected migrations">Squash</button>
+          <button id="btn-update-latest" class="btn btn-primary" title="Update database to latest">Update DB</button>
+          <button id="btn-change-project" class="btn btn-ghost" title="Change project">Change Project</button>
+        </div>
+
+        <!-- Migration List -->
+        <div id="migration-list-container">
+          <table id="migration-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="select-all" /></th>
+                <th class="col-name">Migration</th>
+                <th class="col-status">Status</th>
+                <th class="col-sql">SQL</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="migration-tbody"></tbody>
+          </table>
+          <div id="empty-state" class="hidden">
+            <p>No migrations found. Create one to get started.</p>
+          </div>
+          <div id="loading-state" class="hidden">
+            <p>Loading migrations...</p>
+          </div>
+        </div>
+
+        <!-- Detail Panel (shown when a migration is selected) -->
+        <div id="detail-panel" class="hidden">
+          <div class="detail-header">
+            <h3 id="detail-name"></h3>
+            <button id="btn-close-detail" class="icon-btn">&times;</button>
+          </div>
+          <div class="detail-tabs">
+            <button class="tab active" data-tab="up">Up()</button>
+            <button class="tab" data-tab="down">Down()</button>
+            <button class="tab" data-tab="sql">Custom SQL</button>
+          </div>
+          <div class="detail-content">
+            <pre id="detail-up" class="tab-content active"><code></code></pre>
+            <pre id="detail-down" class="tab-content"><code></code></pre>
+            <div id="detail-sql" class="tab-content">
+              <div id="sql-list"></div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <!-- Modals -->
+      <div id="modal-overlay" class="hidden">
+        <div id="modal" class="modal">
+          <div class="modal-header">
+            <h3 id="modal-title"></h3>
+            <button id="modal-close" class="icon-btn">&times;</button>
+          </div>
+          <div id="modal-body"></div>
+          <div class="modal-footer">
+            <button id="modal-cancel" class="btn btn-ghost">Cancel</button>
+            <button id="modal-confirm" class="btn btn-primary">Confirm</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Toast notifications -->
+      <div id="toast-container"></div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

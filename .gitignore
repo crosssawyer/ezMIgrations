@@ -1,2 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Rust
+src-tauri/target/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Old Python artifacts
 venv/
-migrations/
+__pycache__/
+*.pyc

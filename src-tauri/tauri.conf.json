@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/tauri-v2.0.0/crates/tauri-utils/schema.json",
+  "productName": "ezMigrations",
+  "version": "0.1.0",
+  "identifier": "com.ezmigrations.app",
+  "build": {
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "ezMigrations",
+        "width": 960,
+        "height": 720,
+        "resizable": true,
+        "minWidth": 700,
+        "minHeight": 500
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}
