@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "ezMIgrations"
+version = "0.1.0"
+description = "A python helper to make squashing migrations in EF much easier."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Sawyer Cross", email = "crosssawyer@gmail.com"},
+]
+
+[project.scripts]
+ezmigrations = "main:main"

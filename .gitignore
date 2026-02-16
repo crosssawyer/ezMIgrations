@@ -1,2 +1,7 @@
 venv/
 migrations/
+build/
+dist/
+*.spec
+*.egg-info/
+__pycache__/
