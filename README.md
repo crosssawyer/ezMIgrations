@@ -79,14 +79,14 @@ This will create the tag automatically and trigger the full release.
 
 ### What the pipeline does
 
-1. Builds a standalone executable on each platform using PyInstaller:
-   - `ezmigrations-linux`
-   - `ezmigrations-windows.exe`
-   - `ezmigrations-macos`
+1. Builds native installers on each platform using Tauri:
+   - **Linux** — `.deb` and `.AppImage`
+   - **Windows** — `.msi` and `.exe` (NSIS)
+   - **macOS** — `.dmg`
 2. Creates a GitHub Release tagged with the version
-3. Attaches all three executables to the release
+3. Attaches all installers to the release
 4. Auto-generates release notes from commit history
 
 ### Downloading a release
 
-Go to the [Releases](../../releases) page and download the executable for your platform. No Python installation required — the executables are self-contained.
+Go to the [Releases](../../releases) page and download the installer for your platform.
