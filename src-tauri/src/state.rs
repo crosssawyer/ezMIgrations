@@ -9,6 +9,21 @@ pub struct ProjectConfig {
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SavedProject {
+    pub id: String,
+    pub name: String,
+    pub project_path: String,
+    pub db_context: String,
+    pub startup_project: String,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub projects: Vec<SavedProject>,
+    pub active_project_id: Option<String>,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Migration {
     pub id: String,
     pub name: String,
@@ -28,6 +43,7 @@ pub struct BranchInfo {
 #[derive(Default)]
 pub struct AppState {
     pub config: Mutex<Option<ProjectConfig>>,
+    pub app_config: Mutex<AppConfig>,
     pub migrations: Mutex<Vec<Migration>>,
     pub current_branch: Mutex<String>,
     pub watching: Mutex<bool>,

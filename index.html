@@ -15,6 +15,7 @@
         </div>
         <div class="header-right">
           <span id="branch-badge" class="badge hidden"></span>
+          <button id="btn-settings" class="icon-btn" title="Settings">&#x2699;</button>
           <button id="btn-refresh" class="icon-btn" title="Refresh migrations">&#x21bb;</button>
         </div>
       </header>
@@ -96,6 +97,24 @@
           </div>
         </div>
       </main>
+
+      <!-- Settings Panel -->
+      <section id="settings-panel" class="hidden">
+        <div class="settings-header">
+          <h3>Settings</h3>
+          <button id="btn-close-settings" class="icon-btn">&times;</button>
+        </div>
+        <div class="settings-content">
+          <div class="settings-section-header">
+            <h3>Saved Projects</h3>
+            <button id="btn-add-project" class="btn btn-sm btn-success">+ Add Project</button>
+          </div>
+          <div id="saved-projects-list"></div>
+          <div id="no-projects-state" class="hidden">
+            <p>No saved projects yet. Add one to get started.</p>
+          </div>
+        </div>
+      </section>
 
       <!-- Modals -->
       <div id="modal-overlay" class="hidden">

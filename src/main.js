@@ -6,6 +6,8 @@ const { listen } = window.__TAURI__.event;
 let migrations = [];
 let selectedMigration = null;
 let checkedMigrations = new Set();
+let savedProjects = [];
+let activeProjectId = null;
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
 
@@ -14,6 +16,7 @@ const $$ = (sel) => document.querySelectorAll(sel);
 
 const setupPanel = $("#setup-panel");
 const mainContent = $("#main-content");
+const settingsPanel = $("#settings-panel");
 const branchBadge = $("#branch-badge");
 const migrationTbody = $("#migration-tbody");
 const detailPanel = $("#detail-panel");
@@ -21,6 +24,8 @@ const emptyState = $("#empty-state");
 const loadingState = $("#loading-state");
 const modalOverlay = $("#modal-overlay");
 const operationOverlay = $("#operation-overlay");
+const savedProjectsList = $("#saved-projects-list");
+const noProjectsState = $("#no-projects-state");
 
 // ─── Init ───────────────────────────────────────────────────────────
 
@@ -34,6 +39,7 @@ async function checkExistingProject() {
   try {
     const project = await invoke("get_project");
     if (project) {
+      activeProjectId = project.id || null;
       showMain(project);
     }
   } catch (_) {
@@ -51,6 +57,11 @@ function bindEvents() {
   });
   $("#btn-browse-project").addEventListener("click", () => browseFolder("input-project-path"));
   $("#btn-browse-startup").addEventListener("click", () => browseFolder("input-startup-project"));
+
+  // Settings
+  $("#btn-settings").addEventListener("click", showSettings);
+  $("#btn-close-settings").addEventListener("click", closeSettings);
+  $("#btn-add-project").addEventListener("click", showAddProjectModal);
 
   // Toolbar
   $("#btn-add").addEventListener("click", showAddModal);
@@ -112,6 +123,7 @@ async function connectProject() {
       dbContext: dbContext,
       startupProject: startupProject,
     });
+    activeProjectId = project.id || null;
     showMain(project);
     toast("Project connected", "success");
   } catch (err) {
@@ -121,6 +133,7 @@ async function connectProject() {
 
 function showMain(project) {
   setupPanel.classList.add("hidden");
+  settingsPanel.classList.add("hidden");
   mainContent.classList.remove("hidden");
 
   if (project.branch) {
@@ -134,6 +147,7 @@ function showMain(project) {
 
 function showSetup() {
   mainContent.classList.add("hidden");
+  settingsPanel.classList.add("hidden");
   setupPanel.classList.remove("hidden");
   closeDetail();
 }
@@ -439,6 +453,220 @@ async function deleteMigration(migration) {
   } finally {
     hideOverlay();
   }
+}
+
+// ─── Settings / Saved Projects ──────────────────────────────────────
+
+function showSettings() {
+  mainContent.classList.add("hidden");
+  setupPanel.classList.add("hidden");
+  settingsPanel.classList.remove("hidden");
+  loadSavedProjects();
+}
+
+function closeSettings() {
+  settingsPanel.classList.add("hidden");
+  // If there's an active project, go back to main; otherwise setup
+  if (activeProjectId) {
+    mainContent.classList.remove("hidden");
+  } else {
+    setupPanel.classList.remove("hidden");
+  }
+}
+
+async function loadSavedProjects() {
+  try {
+    savedProjects = await invoke("get_saved_projects");
+    renderSavedProjects();
+  } catch (err) {
+    toast("Failed to load saved projects: " + err, "error");
+  }
+}
+
+function renderSavedProjects() {
+  savedProjectsList.innerHTML = "";
+
+  if (savedProjects.length === 0) {
+    noProjectsState.classList.remove("hidden");
+    return;
+  }
+
+  noProjectsState.classList.add("hidden");
+
+  savedProjects.forEach((proj) => {
+    const card = document.createElement("div");
+    card.className = "project-card" + (activeProjectId === proj.id ? " project-active" : "");
+    card.innerHTML = `
+      <div class="project-card-info">
+        <div class="project-card-name">${escapeHtml(proj.name)}</div>
+        <div class="project-card-path">${escapeHtml(proj.project_path)}</div>
+      </div>
+      <div class="project-card-actions">
+        ${activeProjectId === proj.id
+          ? '<span class="project-active-label">Active</span>'
+          : `<button class="btn btn-sm btn-primary btn-switch" data-id="${proj.id}">Switch</button>`
+        }
+        <button class="btn btn-sm btn-ghost btn-edit-project" data-id="${proj.id}">Edit</button>
+        <button class="btn btn-sm btn-danger btn-delete-project" data-id="${proj.id}">Del</button>
+      </div>
+    `;
+
+    const switchBtn = card.querySelector(".btn-switch");
+    if (switchBtn) {
+      switchBtn.addEventListener("click", () => switchToProject(proj));
+    }
+
+    card.querySelector(".btn-edit-project").addEventListener("click", () => showEditProjectModal(proj));
+    card.querySelector(".btn-delete-project").addEventListener("click", () => confirmDeleteProject(proj));
+
+    savedProjectsList.appendChild(card);
+  });
+}
+
+async function switchToProject(project) {
+  showOverlay("Switching project...");
+  try {
+    const info = await invoke("switch_project", { id: project.id });
+    activeProjectId = info.id;
+    settingsPanel.classList.add("hidden");
+    showMain(info);
+    toast(`Switched to ${project.name}`, "success");
+  } catch (err) {
+    toast("Failed to switch project: " + err, "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
+function showAddProjectModal() {
+  showModal("Add Project", `
+    <div class="form-group">
+      <label for="modal-project-name">Project Name</label>
+      <input type="text" id="modal-project-name" placeholder="My Project" />
+    </div>
+    <div class="form-group">
+      <label for="modal-project-path">Project Path</label>
+      <div class="input-with-browse">
+        <input type="text" id="modal-project-path" placeholder="/path/to/project" />
+        <button id="btn-browse-modal-path" class="btn btn-ghost" title="Browse...">Browse</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="modal-db-context">DbContext Name <span class="hint">(optional)</span></label>
+      <input type="text" id="modal-db-context" placeholder="ApplicationDbContext" />
+    </div>
+    <div class="form-group">
+      <label for="modal-startup-project">Startup Project <span class="hint">(optional)</span></label>
+      <div class="input-with-browse">
+        <input type="text" id="modal-startup-project" placeholder="/path/to/startup/project" />
+        <button id="btn-browse-modal-startup" class="btn btn-ghost" title="Browse...">Browse</button>
+      </div>
+    </div>
+  `, async () => {
+    const name = $("#modal-project-name").value.trim();
+    const path = $("#modal-project-path").value.trim();
+    const dbContext = $("#modal-db-context").value.trim();
+    const startupProject = $("#modal-startup-project").value.trim();
+
+    if (!name) { toast("Enter a project name", "error"); return; }
+    if (!path) { toast("Enter a project path", "error"); return; }
+
+    closeModal();
+    try {
+      await invoke("save_project", { name, path, dbContext, startupProject });
+      toast("Project saved", "success");
+      await loadSavedProjects();
+    } catch (err) {
+      toast("Failed to save project: " + err, "error");
+    }
+  });
+
+  // Bind browse buttons inside modal
+  setTimeout(() => {
+    $("#btn-browse-modal-path")?.addEventListener("click", () => browseFolder("modal-project-path"));
+    $("#btn-browse-modal-startup")?.addEventListener("click", () => browseFolder("modal-startup-project"));
+    $("#modal-project-name")?.focus();
+  }, 100);
+}
+
+function showEditProjectModal(project) {
+  showModal("Edit Project", `
+    <div class="form-group">
+      <label for="modal-project-name">Project Name</label>
+      <input type="text" id="modal-project-name" value="${escapeHtml(project.name)}" />
+    </div>
+    <div class="form-group">
+      <label for="modal-project-path">Project Path</label>
+      <div class="input-with-browse">
+        <input type="text" id="modal-project-path" value="${escapeHtml(project.project_path)}" />
+        <button id="btn-browse-modal-path" class="btn btn-ghost" title="Browse...">Browse</button>
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="modal-db-context">DbContext Name <span class="hint">(optional)</span></label>
+      <input type="text" id="modal-db-context" value="${escapeHtml(project.db_context)}" />
+    </div>
+    <div class="form-group">
+      <label for="modal-startup-project">Startup Project <span class="hint">(optional)</span></label>
+      <div class="input-with-browse">
+        <input type="text" id="modal-startup-project" value="${escapeHtml(project.startup_project)}" />
+        <button id="btn-browse-modal-startup" class="btn btn-ghost" title="Browse...">Browse</button>
+      </div>
+    </div>
+  `, async () => {
+    const name = $("#modal-project-name").value.trim();
+    const path = $("#modal-project-path").value.trim();
+    const dbContext = $("#modal-db-context").value.trim();
+    const startupProject = $("#modal-startup-project").value.trim();
+
+    if (!name) { toast("Enter a project name", "error"); return; }
+    if (!path) { toast("Enter a project path", "error"); return; }
+
+    closeModal();
+    try {
+      await invoke("update_saved_project", {
+        id: project.id, name, path, dbContext, startupProject,
+      });
+      toast("Project updated", "success");
+      await loadSavedProjects();
+    } catch (err) {
+      toast("Failed to update project: " + err, "error");
+    }
+  });
+
+  setTimeout(() => {
+    $("#btn-browse-modal-path")?.addEventListener("click", () => browseFolder("modal-project-path"));
+    $("#btn-browse-modal-startup")?.addEventListener("click", () => browseFolder("modal-startup-project"));
+    $("#modal-project-name")?.focus();
+  }, 100);
+}
+
+function confirmDeleteProject(project) {
+  showModal("Delete Project", `
+    <p style="margin-bottom: 8px;">
+      Are you sure you want to remove <strong>${escapeHtml(project.name)}</strong>?
+    </p>
+    <p style="color: var(--text-dim); font-size: 12px;">
+      This only removes the project from your saved list. No files on disk will be deleted.
+    </p>
+  `, async () => {
+    closeModal();
+    try {
+      await invoke("delete_saved_project", { id: project.id });
+      if (activeProjectId === project.id) {
+        activeProjectId = null;
+      }
+      toast("Project removed", "success");
+      await loadSavedProjects();
+      // If deleted the active project, close settings and show setup
+      if (!activeProjectId) {
+        settingsPanel.classList.add("hidden");
+        showSetup();
+      }
+    } catch (err) {
+      toast("Failed to delete project: " + err, "error");
+    }
+  });
 }
 
 // ─── Branch Watching ────────────────────────────────────────────────

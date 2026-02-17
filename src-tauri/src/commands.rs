@@ -1,18 +1,20 @@
 use crate::dotnet::DotnetEf;
 use crate::git::GitService;
 use crate::parser::MigrationParser;
-use crate::state::{AppState, Migration, ProjectConfig};
+use crate::state::{AppConfig, AppState, Migration, ProjectConfig, SavedProject};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::mpsc::channel;
 use std::thread;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // ─── Project Commands ───────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
 pub struct ProjectInfo {
+    pub id: Option<String>,
     pub path: String,
     pub db_context: String,
     pub startup_project: String,
@@ -21,6 +23,75 @@ pub struct ProjectInfo {
 
 fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("project_config.json"))
+}
+
+fn app_config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("app_config.json"))
+}
+
+fn generate_id() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .to_string()
+}
+
+fn save_app_config(app: &AppHandle, app_config: &AppConfig) -> Result<(), String> {
+    let config_path = app_config_file_path(app).ok_or("Could not resolve app data dir")?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let json = serde_json::to_string_pretty(app_config).map_err(|e| e.to_string())?;
+    std::fs::write(&config_path, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn derive_project_name(project_path: &str) -> String {
+    Path::new(project_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "My Project".to_string())
+}
+
+fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig> {
+    let app_config_path = app_config_file_path(app)?;
+    if app_config_path.exists() {
+        return None; // already migrated
+    }
+
+    let legacy_path = config_file_path(app)?;
+    if !legacy_path.exists() {
+        return None;
+    }
+
+    let json = std::fs::read_to_string(&legacy_path).ok()?;
+    let legacy: ProjectConfig = serde_json::from_str(&json).ok()?;
+
+    if !Path::new(&legacy.project_path).exists() {
+        return None;
+    }
+
+    let id = generate_id();
+    let saved = SavedProject {
+        id: id.clone(),
+        name: derive_project_name(&legacy.project_path),
+        project_path: legacy.project_path.clone(),
+        db_context: legacy.db_context.clone(),
+        startup_project: legacy.startup_project.clone(),
+    };
+
+    let app_config = AppConfig {
+        projects: vec![saved],
+        active_project_id: Some(id),
+    };
+
+    // Persist + load into state
+    let _ = save_app_config(app, &app_config);
+    *state.config.lock().unwrap() = Some(legacy);
+    *state.app_config.lock().unwrap() = app_config.clone();
+
+    Some(app_config)
 }
 
 #[tauri::command]
@@ -44,24 +115,39 @@ pub async fn set_project(
 
     let config = ProjectConfig {
         project_path: project_path.clone(),
-        db_context,
-        startup_project,
+        db_context: db_context.clone(),
+        startup_project: startup_project.clone(),
     };
 
-    // Persist to disk
-    if let Some(config_path) = config_file_path(&app) {
-        if let Some(parent) = config_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(&config) {
-            let _ = std::fs::write(&config_path, json);
-        }
-    }
+    // Upsert into app_config
+    let project_id = {
+        let mut ac = state.app_config.lock().unwrap();
+        // Find existing by path or create new
+        let id = if let Some(existing) = ac.projects.iter_mut().find(|p| p.project_path == project_path) {
+            existing.db_context = db_context.clone();
+            existing.startup_project = startup_project.clone();
+            existing.id.clone()
+        } else {
+            let id = generate_id();
+            ac.projects.push(SavedProject {
+                id: id.clone(),
+                name: derive_project_name(&project_path),
+                project_path: project_path.clone(),
+                db_context: db_context.clone(),
+                startup_project: startup_project.clone(),
+            });
+            id
+        };
+        ac.active_project_id = Some(id.clone());
+        let _ = save_app_config(&app, &ac);
+        id
+    };
 
     *state.config.lock().unwrap() = Some(config.clone());
     *state.current_branch.lock().unwrap() = branch.clone();
 
     Ok(ProjectInfo {
+        id: Some(project_id),
         path: config.project_path,
         db_context: config.db_context,
         startup_project: config.startup_project,
@@ -79,7 +165,9 @@ pub async fn get_project(
         let config = state.config.lock().unwrap();
         if config.is_some() {
             let branch = state.current_branch.lock().unwrap().clone();
+            let active_id = state.app_config.lock().unwrap().active_project_id.clone();
             return Ok(config.as_ref().map(|c| ProjectInfo {
+                id: active_id,
                 path: c.project_path.clone(),
                 db_context: c.db_context.clone(),
                 startup_project: c.startup_project.clone(),
@@ -88,7 +176,80 @@ pub async fn get_project(
         }
     }
 
-    // Try loading from disk
+    // Try legacy migration first
+    let legacy_info = if migrate_legacy_config(&app, &state).is_some() {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().map(|c| {
+            let path = c.project_path.clone();
+            let active_id = state.app_config.lock().unwrap().active_project_id.clone();
+            (path, active_id)
+        })
+    } else {
+        None
+    };
+
+    if let Some((branch_path, active_id)) = legacy_info {
+        let branch = tokio::task::spawn_blocking(move || {
+            GitService::get_current_branch(&branch_path).unwrap_or_default()
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+        *state.current_branch.lock().unwrap() = branch.clone();
+
+        let config = state.config.lock().unwrap();
+        return Ok(config.as_ref().map(|c| ProjectInfo {
+            id: active_id,
+            path: c.project_path.clone(),
+            db_context: c.db_context.clone(),
+            startup_project: c.startup_project.clone(),
+            branch,
+        }));
+    }
+
+    // Try loading from app_config.json
+    let app_config_path = app_config_file_path(&app);
+    if let Some(ref p) = app_config_path {
+        if p.exists() {
+            if let Ok(json) = std::fs::read_to_string(p) {
+                if let Ok(ac) = serde_json::from_str::<AppConfig>(&json) {
+                    *state.app_config.lock().unwrap() = ac.clone();
+
+                    if let Some(ref active_id) = ac.active_project_id {
+                        if let Some(proj) = ac.projects.iter().find(|p| &p.id == active_id) {
+                            if Path::new(&proj.project_path).exists() {
+                                let config = ProjectConfig {
+                                    project_path: proj.project_path.clone(),
+                                    db_context: proj.db_context.clone(),
+                                    startup_project: proj.startup_project.clone(),
+                                };
+
+                                let pp = config.project_path.clone();
+                                let branch = tokio::task::spawn_blocking(move || {
+                                    GitService::get_current_branch(&pp).unwrap_or_default()
+                                })
+                                .await
+                                .map_err(|e| e.to_string())?;
+
+                                *state.config.lock().unwrap() = Some(config.clone());
+                                *state.current_branch.lock().unwrap() = branch.clone();
+
+                                return Ok(Some(ProjectInfo {
+                                    id: Some(active_id.clone()),
+                                    path: config.project_path,
+                                    db_context: config.db_context,
+                                    startup_project: config.startup_project,
+                                    branch,
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to legacy project_config.json
     let config_path = match config_file_path(&app) {
         Some(p) if p.exists() => p,
         _ => return Ok(None),
@@ -104,7 +265,6 @@ pub async fn get_project(
         Err(_) => return Ok(None),
     };
 
-    // Validate path still exists
     if !Path::new(&config.project_path).exists() {
         return Ok(None);
     }
@@ -120,11 +280,177 @@ pub async fn get_project(
     *state.current_branch.lock().unwrap() = branch.clone();
 
     Ok(Some(ProjectInfo {
+        id: None,
         path: config.project_path,
         db_context: config.db_context,
         startup_project: config.startup_project,
         branch,
     }))
+}
+
+// ─── Saved Project Commands ─────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_saved_projects(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<SavedProject>, String> {
+    // Ensure app_config is loaded
+    {
+        let ac = state.app_config.lock().unwrap();
+        if !ac.projects.is_empty() {
+            return Ok(ac.projects.clone());
+        }
+    }
+
+    // Try loading from disk
+    if let Some(p) = app_config_file_path(&app) {
+        if p.exists() {
+            if let Ok(json) = std::fs::read_to_string(&p) {
+                if let Ok(ac) = serde_json::from_str::<AppConfig>(&json) {
+                    let projects = ac.projects.clone();
+                    *state.app_config.lock().unwrap() = ac;
+                    return Ok(projects);
+                }
+            }
+        }
+    }
+
+    // Try legacy migration
+    if let Some(ac) = migrate_legacy_config(&app, &state) {
+        return Ok(ac.projects);
+    }
+
+    Ok(vec![])
+}
+
+#[tauri::command]
+pub async fn save_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+    path: String,
+    db_context: String,
+    startup_project: String,
+) -> Result<SavedProject, String> {
+    if !Path::new(&path).exists() {
+        return Err(format!("Path does not exist: {}", path));
+    }
+
+    let id = generate_id();
+    let saved = SavedProject {
+        id: id.clone(),
+        name,
+        project_path: path,
+        db_context,
+        startup_project,
+    };
+
+    {
+        let mut ac = state.app_config.lock().unwrap();
+        ac.projects.push(saved.clone());
+        save_app_config(&app, &ac)?;
+    }
+
+    Ok(saved)
+}
+
+#[tauri::command]
+pub async fn update_saved_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    name: String,
+    path: String,
+    db_context: String,
+    startup_project: String,
+) -> Result<SavedProject, String> {
+    let mut ac = state.app_config.lock().unwrap();
+    let proj = ac.projects.iter_mut().find(|p| p.id == id)
+        .ok_or_else(|| format!("Project not found: {}", id))?;
+
+    proj.name = name;
+    proj.project_path = path;
+    proj.db_context = db_context;
+    proj.startup_project = startup_project;
+
+    let updated = proj.clone();
+    save_app_config(&app, &ac)?;
+
+    // If this is the active project, update the in-memory config too
+    if ac.active_project_id.as_ref() == Some(&id) {
+        *state.config.lock().unwrap() = Some(ProjectConfig {
+            project_path: updated.project_path.clone(),
+            db_context: updated.db_context.clone(),
+            startup_project: updated.startup_project.clone(),
+        });
+    }
+
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn delete_saved_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    let mut ac = state.app_config.lock().unwrap();
+    ac.projects.retain(|p| p.id != id);
+
+    if ac.active_project_id.as_ref() == Some(&id) {
+        ac.active_project_id = None;
+        *state.config.lock().unwrap() = None;
+    }
+
+    save_app_config(&app, &ac)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn switch_project(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<ProjectInfo, String> {
+    let project = {
+        let mut ac = state.app_config.lock().unwrap();
+        let proj = ac.projects.iter().find(|p| p.id == id)
+            .ok_or_else(|| format!("Project not found: {}", id))?
+            .clone();
+        ac.active_project_id = Some(id.clone());
+        save_app_config(&app, &ac)?;
+        proj
+    };
+
+    if !Path::new(&project.project_path).exists() {
+        return Err(format!("Path does not exist: {}", project.project_path));
+    }
+
+    let config = ProjectConfig {
+        project_path: project.project_path.clone(),
+        db_context: project.db_context.clone(),
+        startup_project: project.startup_project.clone(),
+    };
+
+    let pp = config.project_path.clone();
+    let branch = tokio::task::spawn_blocking(move || {
+        GitService::get_current_branch(&pp).unwrap_or_default()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    *state.config.lock().unwrap() = Some(config);
+    *state.current_branch.lock().unwrap() = branch.clone();
+    *state.watching.lock().unwrap() = false;
+
+    Ok(ProjectInfo {
+        id: Some(project.id),
+        path: project.project_path,
+        db_context: project.db_context,
+        startup_project: project.startup_project,
+        branch,
+    })
 }
 
 // ─── Migration Commands ─────────────────────────────────────────────

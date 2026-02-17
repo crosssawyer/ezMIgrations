@@ -23,6 +23,11 @@ pub fn run() {
             commands::generate_script,
             commands::get_current_branch,
             commands::start_branch_watcher,
+            commands::get_saved_projects,
+            commands::save_project,
+            commands::update_saved_project,
+            commands::delete_saved_project,
+            commands::switch_project,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
