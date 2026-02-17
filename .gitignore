@@ -1,2 +1,5 @@
 venv/
 migrations/
+__pycache__/
+*.pyc
+settings.json
