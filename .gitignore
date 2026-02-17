@@ -1,2 +1,30 @@
-venv/
-migrations/
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Rust
+src-tauri/target/
+
+# Tauri generated
+src-tauri/gen/
+src-tauri/icons/
+
+# Lock files (regenerated on install/build)
+package-lock.json
+src-tauri/Cargo.lock
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
