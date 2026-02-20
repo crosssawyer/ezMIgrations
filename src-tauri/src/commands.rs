@@ -19,6 +19,7 @@ pub struct ProjectInfo {
     pub db_context: String,
     pub startup_project: String,
     pub branch: String,
+    pub stable_migration: Option<String>,
 }
 
 fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -79,6 +80,7 @@ fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig>
         project_path: legacy.project_path.clone(),
         db_context: legacy.db_context.clone(),
         startup_project: legacy.startup_project.clone(),
+        stable_migration: None,
     };
 
     let app_config = AppConfig {
@@ -120,13 +122,13 @@ pub async fn set_project(
     };
 
     // Upsert into app_config
-    let project_id = {
+    let (project_id, stable_migration) = {
         let mut ac = state.app_config.lock().unwrap();
         // Find existing by path or create new
-        let id = if let Some(existing) = ac.projects.iter_mut().find(|p| p.project_path == project_path) {
+        let (id, stable) = if let Some(existing) = ac.projects.iter_mut().find(|p| p.project_path == project_path) {
             existing.db_context = db_context.clone();
             existing.startup_project = startup_project.clone();
-            existing.id.clone()
+            (existing.id.clone(), existing.stable_migration.clone())
         } else {
             let id = generate_id();
             ac.projects.push(SavedProject {
@@ -135,12 +137,13 @@ pub async fn set_project(
                 project_path: project_path.clone(),
                 db_context: db_context.clone(),
                 startup_project: startup_project.clone(),
+                stable_migration: None,
             });
-            id
+            (id, None)
         };
         ac.active_project_id = Some(id.clone());
         let _ = save_app_config(&app, &ac);
-        id
+        (id, stable)
     };
 
     *state.config.lock().unwrap() = Some(config.clone());
@@ -152,6 +155,7 @@ pub async fn set_project(
         db_context: config.db_context,
         startup_project: config.startup_project,
         branch,
+        stable_migration,
     })
 }
 
@@ -165,13 +169,18 @@ pub async fn get_project(
         let config = state.config.lock().unwrap();
         if config.is_some() {
             let branch = state.current_branch.lock().unwrap().clone();
-            let active_id = state.app_config.lock().unwrap().active_project_id.clone();
+            let ac = state.app_config.lock().unwrap();
+            let active_id = ac.active_project_id.clone();
+            let stable_migration = active_id.as_ref()
+                .and_then(|id| ac.projects.iter().find(|p| &p.id == id))
+                .and_then(|p| p.stable_migration.clone());
             return Ok(config.as_ref().map(|c| ProjectInfo {
                 id: active_id,
                 path: c.project_path.clone(),
                 db_context: c.db_context.clone(),
                 startup_project: c.startup_project.clone(),
                 branch,
+                stable_migration,
             }));
         }
     }
@@ -199,11 +208,12 @@ pub async fn get_project(
 
         let config = state.config.lock().unwrap();
         return Ok(config.as_ref().map(|c| ProjectInfo {
-            id: active_id,
+            id: active_id.clone(),
             path: c.project_path.clone(),
             db_context: c.db_context.clone(),
             startup_project: c.startup_project.clone(),
             branch,
+            stable_migration: None, // legacy projects don't have stable migration
         }));
     }
 
@@ -240,6 +250,7 @@ pub async fn get_project(
                                     db_context: config.db_context,
                                     startup_project: config.startup_project,
                                     branch,
+                                    stable_migration: proj.stable_migration.clone(),
                                 }));
                             }
                         }
@@ -285,6 +296,7 @@ pub async fn get_project(
         db_context: config.db_context,
         startup_project: config.startup_project,
         branch,
+        stable_migration: None,
     }))
 }
 
@@ -344,6 +356,7 @@ pub async fn save_project(
         project_path: path,
         db_context,
         startup_project,
+        stable_migration: None,
     };
 
     {
@@ -443,6 +456,7 @@ pub async fn switch_project(
     *state.config.lock().unwrap() = Some(config);
     *state.current_branch.lock().unwrap() = branch.clone();
     *state.watching.lock().unwrap() = false;
+    *state.watching_migrations.lock().unwrap() = false;
 
     Ok(ProjectInfo {
         id: Some(project.id),
@@ -450,7 +464,24 @@ pub async fn switch_project(
         db_context: project.db_context,
         startup_project: project.startup_project,
         branch,
+        stable_migration: project.stable_migration,
     })
+}
+
+#[tauri::command]
+pub async fn set_stable_migration(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    migration_name: Option<String>,
+) -> Result<(), String> {
+    let mut ac = state.app_config.lock().unwrap();
+    let active_id = ac.active_project_id.clone()
+        .ok_or("No active project")?;
+    let proj = ac.projects.iter_mut().find(|p| p.id == active_id)
+        .ok_or("Active project not found")?;
+    proj.stable_migration = migration_name;
+    save_app_config(&app, &ac)?;
+    Ok(())
 }
 
 // ─── Migration Commands ─────────────────────────────────────────────
@@ -837,6 +868,8 @@ pub async fn start_branch_watcher(
     *state.watching.lock().unwrap() = true;
 
     let project_path = config.project_path.clone();
+    let db_context = config.db_context.clone();
+    let startup_project = config.startup_project.clone();
     let head_path_clone = head_path.clone();
 
     thread::spawn(move || {
@@ -890,4 +923,82 @@ pub async fn start_branch_watcher(
 struct BranchChangeEvent {
     old_branch: String,
     new_branch: String,
+}
+
+#[tauri::command]
+pub async fn start_migration_watcher(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
+
+    let migrations_dir = MigrationParser::find_migrations_dir(&config.project_path)?;
+
+    // Check if already watching
+    {
+        let watching = state.watching_migrations.lock().unwrap();
+        if *watching {
+            return Ok("Already watching for migration changes".to_string());
+        }
+    }
+
+    *state.watching_migrations.lock().unwrap() = true;
+
+    let migrations_dir_str = migrations_dir.to_string_lossy().to_string();
+
+    thread::spawn(move || {
+        let (tx, rx) = channel();
+        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
+            Ok(w) => w,
+            Err(e) => {
+                eprintln!("Failed to create migration watcher: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = watcher.watch(Path::new(&migrations_dir_str), RecursiveMode::Recursive) {
+            eprintln!("Failed to watch migrations directory: {}", e);
+            return;
+        }
+
+        let mut last_emit = std::time::Instant::now();
+
+        loop {
+            match rx.recv() {
+                Ok(Ok(event)) => {
+                    // Only react to .cs file changes
+                    let has_cs = event.paths.iter().any(|p| {
+                        p.extension().and_then(|e| e.to_str()) == Some("cs")
+                    });
+                    if !has_cs {
+                        continue;
+                    }
+
+                    // Debounce: skip if less than 1 second since last emit
+                    let now = std::time::Instant::now();
+                    if now.duration_since(last_emit) < std::time::Duration::from_secs(1) {
+                        continue;
+                    }
+                    last_emit = now;
+
+                    // Small delay to let file operations finish
+                    thread::sleep(std::time::Duration::from_millis(500));
+
+                    let _ = app.emit("migrations-changed", ());
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Migration watcher error: {}", e);
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    Ok(format!(
+        "Watching for migration changes: {}",
+        migrations_dir.display()
+    ))
 }

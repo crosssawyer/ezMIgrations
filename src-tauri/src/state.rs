@@ -15,6 +15,7 @@ pub struct SavedProject {
     pub project_path: String,
     pub db_context: String,
     pub startup_project: String,
+    pub stable_migration: Option<String>,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -47,4 +48,5 @@ pub struct AppState {
     pub migrations: Mutex<Vec<Migration>>,
     pub current_branch: Mutex<String>,
     pub watching: Mutex<bool>,
+    pub watching_migrations: Mutex<bool>,
 }

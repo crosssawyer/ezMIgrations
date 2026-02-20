@@ -8,6 +8,7 @@ let selectedMigration = null;
 let checkedMigrations = new Set();
 let savedProjects = [];
 let activeProjectId = null;
+let stableMigration = null;
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
 
@@ -33,6 +34,7 @@ async function init() {
   bindEvents();
   await checkExistingProject();
   listenForBranchChanges();
+  listenForMigrationChanges();
 }
 
 async function checkExistingProject() {
@@ -40,6 +42,7 @@ async function checkExistingProject() {
     const project = await invoke("get_project");
     if (project) {
       activeProjectId = project.id || null;
+      stableMigration = project.stable_migration || null;
       showMain(project);
     }
   } catch (_) {
@@ -124,6 +127,7 @@ async function connectProject() {
       startupProject: startupProject,
     });
     activeProjectId = project.id || null;
+    stableMigration = project.stable_migration || null;
     showMain(project);
     toast("Project connected", "success");
   } catch (err) {
@@ -143,6 +147,7 @@ function showMain(project) {
 
   refreshMigrations();
   startBranchWatcher();
+  startMigrationWatcher();
 }
 
 function showSetup() {
@@ -183,8 +188,12 @@ function renderMigrations() {
 
   migrations.forEach((m) => {
     const tr = document.createElement("tr");
+    const isStable = stableMigration === m.name;
     if (selectedMigration && selectedMigration.id === m.id) {
       tr.classList.add("selected");
+    }
+    if (isStable) {
+      tr.classList.add("migration-stable");
     }
 
     tr.innerHTML = `
@@ -193,6 +202,7 @@ function renderMigrations() {
       </td>
       <td>
         <span class="migration-name" data-id="${m.id}">${m.name}</span>
+        ${isStable ? '<span class="stable-indicator">Stable</span>' : ""}
       </td>
       <td>
         <span class="${m.applied ? "status-applied" : "status-pending"}">
@@ -205,6 +215,7 @@ function renderMigrations() {
       <td class="col-actions">
         <button class="btn btn-sm btn-ghost btn-view" data-id="${m.id}">View</button>
         <button class="btn btn-sm btn-ghost btn-apply" data-id="${m.id}" title="Update DB to this migration">Apply</button>
+        <button class="btn-stable${isStable ? " active" : ""}" data-name="${m.name}" title="${isStable ? "Unset stable migration" : "Set as stable migration"}">${isStable ? "Unset Stable" : "Set Stable"}</button>
         <button class="btn btn-sm btn-danger btn-delete" data-id="${m.id}" title="Remove migration">Del</button>
       </td>
     `;
@@ -221,6 +232,7 @@ function renderMigrations() {
     // Action buttons
     tr.querySelector(".btn-view").addEventListener("click", () => viewMigration(m));
     tr.querySelector(".btn-apply").addEventListener("click", () => applyUpTo(m));
+    tr.querySelector(".btn-stable").addEventListener("click", () => setStableMigration(m.name));
     tr.querySelector(".btn-delete").addEventListener("click", () => deleteMigration(m));
 
     migrationTbody.appendChild(tr);
@@ -528,6 +540,7 @@ async function switchToProject(project) {
   try {
     const info = await invoke("switch_project", { id: project.id });
     activeProjectId = info.id;
+    stableMigration = info.stable_migration || null;
     settingsPanel.classList.add("hidden");
     showMain(info);
     toast(`Switched to ${project.name}`, "success");
@@ -669,6 +682,20 @@ function confirmDeleteProject(project) {
   });
 }
 
+// ─── Stable Migration ───────────────────────────────────────────────
+
+async function setStableMigration(name) {
+  const newValue = (name === stableMigration) ? null : name;
+  try {
+    await invoke("set_stable_migration", { migrationName: newValue });
+    stableMigration = newValue;
+    renderMigrations();
+    toast(newValue ? `Stable migration set to ${newValue}` : "Stable migration cleared", "success");
+  } catch (err) {
+    toast("Failed to set stable migration: " + err, "error");
+  }
+}
+
 // ─── Branch Watching ────────────────────────────────────────────────
 
 async function startBranchWatcher() {
@@ -679,29 +706,96 @@ async function startBranchWatcher() {
   }
 }
 
+async function startMigrationWatcher() {
+  try {
+    await invoke("start_migration_watcher");
+  } catch (_) {
+    // Non-critical
+  }
+}
+
+function listenForMigrationChanges() {
+  listen("migrations-changed", () => {
+    refreshMigrations();
+  });
+}
+
 function listenForBranchChanges() {
   listen("branch-changed", (event) => {
-    const { old_branch, new_branch } = event.payload;
+    const { old_branch, new_branch, reverted_to_stable } = event.payload;
     branchBadge.textContent = new_branch;
 
-    showModal("Branch Changed", `
-      <p style="margin-bottom: 12px;">
-        Switched from <strong>${old_branch}</strong> to <strong>${new_branch}</strong>
-      </p>
-      <p style="color: var(--text-dim); font-size: 12px;">
-        Would you like to update the database to match the migrations on the new branch?
-      </p>
-    `, async () => {
-      closeModal();
-      toast("Updating database for new branch...", "info");
-      try {
-        const result = await invoke("update_database", { target: "" });
-        toast(result, "success");
-        await refreshMigrations();
-      } catch (err) {
-        toast(err, "error");
-      }
-    });
+    if (reverted_to_stable) {
+      // Backend already reverted to stable using the old compiled assembly.
+      // Just need to update to latest on the new branch.
+      showModal("Branch Changed", `
+        <p style="margin-bottom: 12px;">
+          Switched from <strong>${old_branch}</strong> to <strong>${new_branch}</strong>
+        </p>
+        <p style="margin-bottom: 8px;">
+          Database was automatically reverted to stable migration <strong>${stableMigration}</strong>.
+          Update to latest on <strong>${new_branch}</strong>?
+        </p>
+      `, async () => {
+        closeModal();
+        showOverlay("Updating to latest on " + new_branch + "...");
+        try {
+          const result = await invoke("update_database", { target: "" });
+          toast(result, "success");
+          await refreshMigrations();
+        } catch (err) {
+          toast(err, "error");
+        } finally {
+          hideOverlay();
+        }
+      });
+    } else if (stableMigration) {
+      // Stable is set but auto-revert failed or wasn't possible.
+      // The old branch's .cs files are gone so we can't revert from here.
+      showModal("Branch Changed", `
+        <p style="margin-bottom: 12px;">
+          Switched from <strong>${old_branch}</strong> to <strong>${new_branch}</strong>
+        </p>
+        <p style="margin-bottom: 8px; color: var(--yellow);">
+          Auto-revert to stable migration <strong>${stableMigration}</strong> failed.
+          The compiled assembly may be out of date.
+        </p>
+        <p style="color: var(--text-dim); font-size: 12px;">
+          Try updating to latest on <strong>${new_branch}</strong>. If that fails, you may need to manually revert.
+        </p>
+      `, async () => {
+        closeModal();
+        showOverlay("Updating to latest on " + new_branch + "...");
+        try {
+          const result = await invoke("update_database", { target: "" });
+          toast(result, "success");
+          await refreshMigrations();
+        } catch (err) {
+          toast(err, "error");
+        } finally {
+          hideOverlay();
+        }
+      });
+    } else {
+      showModal("Branch Changed", `
+        <p style="margin-bottom: 12px;">
+          Switched from <strong>${old_branch}</strong> to <strong>${new_branch}</strong>
+        </p>
+        <p style="color: var(--text-dim); font-size: 12px;">
+          Would you like to update the database to match the migrations on the new branch?
+        </p>
+      `, async () => {
+        closeModal();
+        toast("Updating database for new branch...", "info");
+        try {
+          const result = await invoke("update_database", { target: "" });
+          toast(result, "success");
+          await refreshMigrations();
+        } catch (err) {
+          toast(err, "error");
+        }
+      });
+    }
   });
 }
 

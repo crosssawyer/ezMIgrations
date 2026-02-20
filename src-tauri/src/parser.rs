@@ -41,7 +41,7 @@ impl MigrationParser {
     }
 
     /// Locate the Migrations directory within a project.
-    fn find_migrations_dir(project_path: &str) -> Result<PathBuf, String> {
+    pub fn find_migrations_dir(project_path: &str) -> Result<PathBuf, String> {
         let base = Path::new(project_path);
 
         // If project_path points to a .csproj file, use its parent directory

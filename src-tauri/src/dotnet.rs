@@ -27,19 +27,39 @@ impl DotnetEf {
         args: &[&str],
         startup_project: &str,
     ) -> Result<CommandResult, String> {
+        let project = Path::new(project_path);
+
+        // Derive the solution root (parent of the project directory) and run from there
+        // using relative paths, e.g.: dotnet ef migrations remove --project cmms-data --startup-project cmms-api
+        let solution_dir = project.parent();
+
         let mut cmd = Command::new("dotnet");
         cmd.arg("ef");
         cmd.args(args);
-        cmd.arg("--project").arg(project_path);
 
-        if !startup_project.is_empty() {
-            cmd.arg("--startup-project").arg(startup_project);
-        }
+        if let Some(sol_dir) = solution_dir.filter(|p| p.as_os_str().len() > 0 && p.exists()) {
+            cmd.current_dir(sol_dir);
 
-        // Run from the parent directory if project_path is relative
-        if let Some(parent) = Path::new(project_path).parent() {
-            if parent.exists() {
-                cmd.current_dir(parent);
+            // Use path relative to solution root for --project
+            if let Ok(rel) = project.strip_prefix(sol_dir) {
+                cmd.arg("--project").arg(rel);
+            } else {
+                cmd.arg("--project").arg(project_path);
+            }
+
+            // Use path relative to solution root for --startup-project
+            if !startup_project.is_empty() {
+                let sp = Path::new(startup_project);
+                if let Ok(rel) = sp.strip_prefix(sol_dir) {
+                    cmd.arg("--startup-project").arg(rel);
+                } else {
+                    cmd.arg("--startup-project").arg(startup_project);
+                }
+            }
+        } else {
+            cmd.arg("--project").arg(project_path);
+            if !startup_project.is_empty() {
+                cmd.arg("--startup-project").arg(startup_project);
             }
         }
 
@@ -64,23 +84,8 @@ impl DotnetEf {
             args.push("--context");
             args.push(db_context);
         }
-        args.push("--no-build");
 
-        let result = Self::run_ef(project_path, &args, startup_project);
-
-        // If --no-build fails, retry with build
-        let result = match result {
-            Ok(r) if !r.success => {
-                let mut args2 = vec!["migrations", "list"];
-                if !db_context.is_empty() {
-                    args2.push("--context");
-                    args2.push(db_context);
-                }
-                Self::run_ef(project_path, &args2, startup_project)?
-            }
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
+        let result = Self::run_ef(project_path, &args, startup_project)?;
 
         if !result.success {
             return Err(format!(
@@ -189,6 +194,27 @@ impl DotnetEf {
             args.push("--context");
             args.push(db_context);
         }
+        Self::run_ef(project_path, &args, startup_project)
+    }
+
+    /// Update the database without rebuilding — uses the already-compiled assembly.
+    /// Useful for reverting after a branch switch when the old .cs files are gone
+    /// but bin/obj still has the compiled Down() methods.
+    pub fn update_database_no_build(
+        project_path: &str,
+        target: &str,
+        db_context: &str,
+        startup_project: &str,
+    ) -> Result<CommandResult, String> {
+        let mut args = vec!["database", "update"];
+        if !target.is_empty() {
+            args.push(target);
+        }
+        if !db_context.is_empty() {
+            args.push("--context");
+            args.push(db_context);
+        }
+        args.push("--no-build");
         Self::run_ef(project_path, &args, startup_project)
     }
 

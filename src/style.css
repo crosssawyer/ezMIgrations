@@ -378,6 +378,55 @@ input[type="text"]::placeholder {
   color: var(--accent);
 }
 
+/* ── Stable Migration ────────────────────────────────── */
+
+.btn-stable {
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-stable:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(108, 140, 255, 0.08);
+}
+
+.btn-stable.active {
+  border-color: var(--accent);
+  background: rgba(108, 140, 255, 0.15);
+  color: var(--accent);
+}
+
+.stable-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  margin-left: 8px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(108, 140, 255, 0.12);
+}
+
+tr.migration-stable td {
+  border-left: 2px solid var(--accent);
+}
+
+tr.migration-stable td:first-child {
+  padding-left: 10px;
+}
+
 /* ── Custom Checkboxes ──────────────────────────────── */
 
 input[type="checkbox"] {
