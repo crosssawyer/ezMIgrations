@@ -1,7 +1,22 @@
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::thread;
+use std::time::Duration;
 
 pub struct DotnetEf;
+
+struct RunningEfProcess {
+    child: Child,
+    operation: String,
+    canceled: bool,
+}
+
+fn running_process() -> &'static Mutex<Option<RunningEfProcess>> {
+    static RUNNING_PROCESS: OnceLock<Mutex<Option<RunningEfProcess>>> = OnceLock::new();
+    RUNNING_PROCESS.get_or_init(|| Mutex::new(None))
+}
 
 #[derive(Debug)]
 pub struct CommandResult {
@@ -22,11 +37,7 @@ impl CommandResult {
 }
 
 impl DotnetEf {
-    fn run_ef(
-        project_path: &str,
-        args: &[&str],
-        startup_project: &str,
-    ) -> Result<CommandResult, String> {
+    fn build_ef_command(project_path: &str, args: &[&str], startup_project: &str) -> Command {
         let project = Path::new(project_path);
 
         // Derive the solution root (parent of the project directory) and run from there
@@ -63,13 +74,143 @@ impl DotnetEf {
             }
         }
 
-        cmd.output()
+        cmd
+    }
+
+    fn run_ef(
+        project_path: &str,
+        args: &[&str],
+        startup_project: &str,
+    ) -> Result<CommandResult, String> {
+        Self::build_ef_command(project_path, args, startup_project)
+            .output()
             .map(|output| CommandResult {
                 success: output.status.success(),
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             })
             .map_err(|e| format!("Failed to execute dotnet ef: {}", e))
+    }
+
+    fn run_ef_cancellable(
+        project_path: &str,
+        args: &[&str],
+        startup_project: &str,
+        operation: &str,
+    ) -> Result<CommandResult, String> {
+        let mut cmd = Self::build_ef_command(project_path, args, startup_project);
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("Failed to execute dotnet ef: {}", e))?;
+
+        let mut child_stdout = child
+            .stdout
+            .take()
+            .ok_or("Failed to capture dotnet ef stdout")?;
+        let mut child_stderr = child
+            .stderr
+            .take()
+            .ok_or("Failed to capture dotnet ef stderr")?;
+
+        let stdout_reader = thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = child_stdout.read_to_end(&mut buffer);
+            buffer
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = child_stderr.read_to_end(&mut buffer);
+            buffer
+        });
+
+        {
+            let mut guard = running_process()
+                .lock()
+                .map_err(|_| "Failed to lock running operation state".to_string())?;
+            if guard.is_some() {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err("Another operation is already running".to_string());
+            }
+
+            *guard = Some(RunningEfProcess {
+                child,
+                operation: operation.to_string(),
+                canceled: false,
+            });
+        }
+
+        let exit_status = loop {
+            let maybe_status = {
+                let mut guard = running_process()
+                    .lock()
+                    .map_err(|_| "Failed to lock running operation state".to_string())?;
+                let running = guard
+                    .as_mut()
+                    .ok_or("Running operation disappeared unexpectedly")?;
+                running
+                    .child
+                    .try_wait()
+                    .map_err(|e| format!("Failed while waiting for dotnet ef: {}", e))?
+            };
+
+            if let Some(status) = maybe_status {
+                break status;
+            }
+
+            thread::sleep(Duration::from_millis(120));
+        };
+
+        let canceled = {
+            let mut guard = running_process()
+                .lock()
+                .map_err(|_| "Failed to lock running operation state".to_string())?;
+            if let Some(mut running) = guard.take() {
+                let _ = running.child.wait();
+                running.canceled
+            } else {
+                false
+            }
+        };
+
+        let stdout = String::from_utf8_lossy(&stdout_reader.join().unwrap_or_default()).to_string();
+        let mut stderr =
+            String::from_utf8_lossy(&stderr_reader.join().unwrap_or_default()).to_string();
+
+        if canceled {
+            if !stderr.trim().is_empty() {
+                stderr.push('\n');
+            }
+            stderr.push_str("Operation canceled by user.");
+        }
+
+        Ok(CommandResult {
+            success: exit_status.success() && !canceled,
+            stdout,
+            stderr,
+        })
+    }
+
+    pub fn cancel_running_operation() -> Result<String, String> {
+        let mut guard = running_process()
+            .lock()
+            .map_err(|_| "Failed to lock running operation state".to_string())?;
+        let running = guard
+            .as_mut()
+            .ok_or("No cancelable operation is currently running")?;
+
+        running.canceled = true;
+        running
+            .child
+            .kill()
+            .map_err(|e| format!("Failed to cancel '{}': {}", running.operation, e))?;
+
+        Ok(format!("Cancel requested for '{}'", running.operation))
     }
 
     /// List all migrations and their applied status.
@@ -158,7 +299,7 @@ impl DotnetEf {
             args.push("--context");
             args.push(db_context);
         }
-        Self::run_ef(project_path, &args, startup_project)
+        Self::run_ef_cancellable(project_path, &args, startup_project, "add migration")
     }
 
     /// Remove the last migration.
@@ -176,7 +317,7 @@ impl DotnetEf {
         if force {
             args.push("--force");
         }
-        Self::run_ef(project_path, &args, startup_project)
+        Self::run_ef_cancellable(project_path, &args, startup_project, "remove migration")
     }
 
     /// Update the database to a specific migration (or latest if target is empty).
@@ -194,7 +335,7 @@ impl DotnetEf {
             args.push("--context");
             args.push(db_context);
         }
-        Self::run_ef(project_path, &args, startup_project)
+        Self::run_ef_cancellable(project_path, &args, startup_project, "update database")
     }
 
     /// Update the database without rebuilding — uses the already-compiled assembly.
@@ -215,7 +356,7 @@ impl DotnetEf {
             args.push(db_context);
         }
         args.push("--no-build");
-        Self::run_ef(project_path, &args, startup_project)
+        Self::run_ef_cancellable(project_path, &args, startup_project, "update database")
     }
 
     /// Generate SQL script between two migrations.

@@ -25,6 +25,7 @@ const emptyState = $("#empty-state");
 const loadingState = $("#loading-state");
 const modalOverlay = $("#modal-overlay");
 const operationOverlay = $("#operation-overlay");
+const operationCancelBtn = $("#btn-cancel-operation");
 const savedProjectsList = $("#saved-projects-list");
 const noProjectsState = $("#no-projects-state");
 
@@ -95,6 +96,9 @@ function bindEvents() {
   modalOverlay.addEventListener("click", (e) => {
     if (e.target === modalOverlay) closeModal();
   });
+
+  // Operation overlay
+  operationCancelBtn?.addEventListener("click", cancelRunningOperation);
 }
 
 // ─── Browse ─────────────────────────────────────────────────────────
@@ -300,15 +304,42 @@ function switchTab(tabName) {
 
 // ─── Operation Overlay ──────────────────────────────────────────────
 
-function showOverlay(message) {
+function showOverlay(message, options = {}) {
+  const { cancelable = false } = options;
   $("#operation-message").textContent = message;
+  if (operationCancelBtn) {
+    operationCancelBtn.textContent = "Cancel";
+    operationCancelBtn.disabled = false;
+    operationCancelBtn.classList.toggle("hidden", !cancelable);
+  }
   operationOverlay.classList.remove("hidden");
   setToolbarDisabled(true);
 }
 
 function hideOverlay() {
   operationOverlay.classList.add("hidden");
+  if (operationCancelBtn) {
+    operationCancelBtn.classList.add("hidden");
+    operationCancelBtn.textContent = "Cancel";
+    operationCancelBtn.disabled = false;
+  }
   setToolbarDisabled(false);
+}
+
+async function cancelRunningOperation() {
+  if (!operationCancelBtn || operationCancelBtn.disabled) return;
+
+  operationCancelBtn.disabled = true;
+  operationCancelBtn.textContent = "Cancelling...";
+
+  try {
+    const result = await invoke("cancel_running_operation");
+    toast(result, "info");
+  } catch (err) {
+    toast("Failed to cancel operation: " + err, "error");
+    operationCancelBtn.disabled = false;
+    operationCancelBtn.textContent = "Cancel";
+  }
 }
 
 function setToolbarDisabled(disabled) {
@@ -333,7 +364,7 @@ function showAddModal() {
       return;
     }
     closeModal();
-    showOverlay("Adding migration...");
+    showOverlay("Adding migration...", { cancelable: true });
     try {
       const result = await invoke("add_migration", { name });
       toast(result, "success");
@@ -382,7 +413,7 @@ function showSquashModal() {
       return;
     }
     closeModal();
-    showOverlay("Squashing migrations...");
+    showOverlay("Squashing migrations...", { cancelable: true });
     try {
       const result = await invoke("squash_migrations", {
         fromMigration: fromMigration.name,
@@ -403,7 +434,7 @@ function showSquashModal() {
 }
 
 async function updateToLatest() {
-  showOverlay("Updating database...");
+  showOverlay("Updating database...", { cancelable: true });
   try {
     const result = await invoke("update_database", { target: "" });
     toast(result, "success");
@@ -416,7 +447,7 @@ async function updateToLatest() {
 }
 
 async function applyUpTo(migration) {
-  showOverlay(`Updating to ${migration.name}...`);
+  showOverlay(`Updating to ${migration.name}...`, { cancelable: true });
   try {
     const result = await invoke("update_database", { target: migration.name });
     toast(result, "success");
@@ -441,7 +472,7 @@ async function deleteMigration(migration) {
       </p>
     `, async () => {
       closeModal();
-      showOverlay("Removing migration...");
+      showOverlay("Removing migration...", { cancelable: true });
       try {
         const result = await invoke("remove_migration", { force: true });
         toast(result, "success");
@@ -451,11 +482,11 @@ async function deleteMigration(migration) {
       } finally {
         hideOverlay();
       }
-    });
+    }, { confirmText: "Force Remove" });
     return;
   }
 
-  showOverlay("Removing migration...");
+  showOverlay("Removing migration...", { cancelable: true });
   try {
     const result = await invoke("remove_migration", { force: false });
     toast(result, "success");
@@ -738,7 +769,7 @@ function listenForBranchChanges() {
         </p>
       `, async () => {
         closeModal();
-        showOverlay("Updating to latest on " + new_branch + "...");
+        showOverlay("Updating to latest on " + new_branch + "...", { cancelable: true });
         try {
           const result = await invoke("update_database", { target: "" });
           toast(result, "success");
@@ -765,7 +796,7 @@ function listenForBranchChanges() {
         </p>
       `, async () => {
         closeModal();
-        showOverlay("Updating to latest on " + new_branch + "...");
+        showOverlay("Updating to latest on " + new_branch + "...", { cancelable: true });
         try {
           const result = await invoke("update_database", { target: "" });
           toast(result, "success");
@@ -786,13 +817,15 @@ function listenForBranchChanges() {
         </p>
       `, async () => {
         closeModal();
-        toast("Updating database for new branch...", "info");
+        showOverlay("Updating database for new branch...", { cancelable: true });
         try {
           const result = await invoke("update_database", { target: "" });
           toast(result, "success");
           await refreshMigrations();
         } catch (err) {
           toast(err, "error");
+        } finally {
+          hideOverlay();
         }
       });
     }
@@ -801,15 +834,25 @@ function listenForBranchChanges() {
 
 // ─── Modal Helpers ──────────────────────────────────────────────────
 
-function showModal(title, body, onConfirm) {
+function showModal(title, body, onConfirm, options = {}) {
+  const { confirmText = "Confirm", cancelText = "Cancel", hideCancel = false } = options;
+
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = body;
   modalOverlay.classList.remove("hidden");
+  const cancelBtn = $("#modal-cancel");
+  cancelBtn.textContent = cancelText;
+  cancelBtn.classList.toggle("hidden", hideCancel);
 
   const confirmBtn = $("#modal-confirm");
   const newConfirm = confirmBtn.cloneNode(true);
+  newConfirm.textContent = confirmText;
   confirmBtn.replaceWith(newConfirm);
-  newConfirm.addEventListener("click", onConfirm);
+  if (typeof onConfirm === "function") {
+    newConfirm.addEventListener("click", onConfirm);
+  } else {
+    newConfirm.addEventListener("click", closeModal);
+  }
 }
 
 function closeModal() {

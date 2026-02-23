@@ -699,6 +699,16 @@ input[type="checkbox"]:checked::after {
   font-weight: 500;
 }
 
+#btn-cancel-operation {
+  min-width: 0;
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+
+#btn-cancel-operation:hover {
+  color: var(--text);
+}
+
 /* ── Empty / Loading States ─────────────────────────── */
 
 #empty-state,

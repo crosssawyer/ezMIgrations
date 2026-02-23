@@ -18,6 +18,7 @@ pub fn run() {
             commands::add_migration,
             commands::remove_migration,
             commands::update_database,
+            commands::cancel_running_operation,
             commands::get_migration_sql,
             commands::squash_migrations,
             commands::generate_script,

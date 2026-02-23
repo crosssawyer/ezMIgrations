@@ -23,11 +23,17 @@ pub struct ProjectInfo {
 }
 
 fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("project_config.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("project_config.json"))
 }
 
 fn app_config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("app_config.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("app_config.json"))
 }
 
 fn generate_id() -> String {
@@ -125,7 +131,11 @@ pub async fn set_project(
     let (project_id, stable_migration) = {
         let mut ac = state.app_config.lock().unwrap();
         // Find existing by path or create new
-        let (id, stable) = if let Some(existing) = ac.projects.iter_mut().find(|p| p.project_path == project_path) {
+        let (id, stable) = if let Some(existing) = ac
+            .projects
+            .iter_mut()
+            .find(|p| p.project_path == project_path)
+        {
             existing.db_context = db_context.clone();
             existing.startup_project = startup_project.clone();
             (existing.id.clone(), existing.stable_migration.clone())
@@ -171,7 +181,8 @@ pub async fn get_project(
             let branch = state.current_branch.lock().unwrap().clone();
             let ac = state.app_config.lock().unwrap();
             let active_id = ac.active_project_id.clone();
-            let stable_migration = active_id.as_ref()
+            let stable_migration = active_id
+                .as_ref()
                 .and_then(|id| ac.projects.iter().find(|p| &p.id == id))
                 .and_then(|p| p.stable_migration.clone());
             return Ok(config.as_ref().map(|c| ProjectInfo {
@@ -379,7 +390,10 @@ pub async fn update_saved_project(
     startup_project: String,
 ) -> Result<SavedProject, String> {
     let mut ac = state.app_config.lock().unwrap();
-    let proj = ac.projects.iter_mut().find(|p| p.id == id)
+    let proj = ac
+        .projects
+        .iter_mut()
+        .find(|p| p.id == id)
         .ok_or_else(|| format!("Project not found: {}", id))?;
 
     proj.name = name;
@@ -428,7 +442,10 @@ pub async fn switch_project(
 ) -> Result<ProjectInfo, String> {
     let project = {
         let mut ac = state.app_config.lock().unwrap();
-        let proj = ac.projects.iter().find(|p| p.id == id)
+        let proj = ac
+            .projects
+            .iter()
+            .find(|p| p.id == id)
             .ok_or_else(|| format!("Project not found: {}", id))?
             .clone();
         ac.active_project_id = Some(id.clone());
@@ -475,9 +492,11 @@ pub async fn set_stable_migration(
     migration_name: Option<String>,
 ) -> Result<(), String> {
     let mut ac = state.app_config.lock().unwrap();
-    let active_id = ac.active_project_id.clone()
-        .ok_or("No active project")?;
-    let proj = ac.projects.iter_mut().find(|p| p.id == active_id)
+    let active_id = ac.active_project_id.clone().ok_or("No active project")?;
+    let proj = ac
+        .projects
+        .iter_mut()
+        .find(|p| p.id == active_id)
         .ok_or("Active project not found")?;
     proj.stable_migration = migration_name;
     save_app_config(&app, &ac)?;
@@ -503,8 +522,7 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
         let mut migrations: Vec<Migration> = Vec::new();
 
         for (name, applied) in &ef_migrations {
-            let file_path =
-                MigrationParser::get_migration_file(&config.project_path, name);
+            let file_path = MigrationParser::get_migration_file(&config.project_path, name);
 
             let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(ref fp) = file_path {
                 match MigrationParser::parse_file(fp) {
@@ -560,7 +578,10 @@ pub async fn add_migration(state: State<'_, AppState>, name: String) -> Result<S
     if result.success {
         Ok(format!("Migration created successfully"))
     } else {
-        Err(format!("Failed to create migration: {}", result.error_output()))
+        Err(format!(
+            "Failed to create migration: {}",
+            result.error_output()
+        ))
     }
 }
 
@@ -585,15 +606,15 @@ pub async fn remove_migration(state: State<'_, AppState>, force: bool) -> Result
     if result.success {
         Ok("Last migration removed successfully".to_string())
     } else {
-        Err(format!("Failed to remove migration: {}", result.error_output()))
+        Err(format!(
+            "Failed to remove migration: {}",
+            result.error_output()
+        ))
     }
 }
 
 #[tauri::command]
-pub async fn update_database(
-    state: State<'_, AppState>,
-    target: String,
-) -> Result<String, String> {
+pub async fn update_database(state: State<'_, AppState>, target: String) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
@@ -618,8 +639,18 @@ pub async fn update_database(
             Ok(format!("Database updated to migration: {}", target))
         }
     } else {
-        Err(format!("Failed to update database: {}", result.error_output()))
+        Err(format!(
+            "Failed to update database: {}",
+            result.error_output()
+        ))
     }
+}
+
+#[tauri::command]
+pub async fn cancel_running_operation() -> Result<String, String> {
+    tokio::task::spawn_blocking(|| DotnetEf::cancel_running_operation())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -821,7 +852,10 @@ pub async fn generate_script(
     if result.success {
         Ok(result.stdout)
     } else {
-        Err(format!("Failed to generate script: {}", result.error_output()))
+        Err(format!(
+            "Failed to generate script: {}",
+            result.error_output()
+        ))
     }
 }
 
@@ -831,14 +865,16 @@ pub async fn generate_script(
 pub async fn get_current_branch(state: State<'_, AppState>) -> Result<String, String> {
     let project_path = {
         let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.project_path.clone()
+        guard
+            .as_ref()
+            .ok_or("No project configured")?
+            .project_path
+            .clone()
     };
 
-    let branch = tokio::task::spawn_blocking(move || {
-        GitService::get_current_branch(&project_path)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let branch = tokio::task::spawn_blocking(move || GitService::get_current_branch(&project_path))
+        .await
+        .map_err(|e| e.to_string())??;
 
     *state.current_branch.lock().unwrap() = branch.clone();
     Ok(branch)
@@ -854,8 +890,8 @@ pub async fn start_branch_watcher(
         guard.as_ref().ok_or("No project configured")?.clone()
     };
 
-    let head_path = GitService::get_head_path(&config.project_path)
-        .ok_or("Could not find .git/HEAD")?;
+    let head_path =
+        GitService::get_head_path(&config.project_path).ok_or("Could not find .git/HEAD")?;
 
     // Check if already watching
     {
@@ -970,9 +1006,10 @@ pub async fn start_migration_watcher(
             match rx.recv() {
                 Ok(Ok(event)) => {
                     // Only react to .cs file changes
-                    let has_cs = event.paths.iter().any(|p| {
-                        p.extension().and_then(|e| e.to_str()) == Some("cs")
-                    });
+                    let has_cs = event
+                        .paths
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("cs"));
                     if !has_cs {
                         continue;
                     }
