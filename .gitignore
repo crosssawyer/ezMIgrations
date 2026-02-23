@@ -13,7 +13,6 @@ src-tauri/gen/
 src-tauri/icons/
 
 # Lock files (regenerated on install/build)
-package-lock.json
 src-tauri/Cargo.lock
 
 # Python
