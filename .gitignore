@@ -10,7 +10,6 @@ src-tauri/target/
 
 # Tauri generated
 src-tauri/gen/
-src-tauri/icons/
 
 # Lock files (regenerated on install/build)
 src-tauri/Cargo.lock
