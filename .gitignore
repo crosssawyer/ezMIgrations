@@ -3,6 +3,7 @@ node_modules/
 
 # Build output
 dist/
+build/
 
 # Rust
 src-tauri/target/
@@ -14,6 +15,12 @@ src-tauri/icons/
 # Lock files (regenerated on install/build)
 package-lock.json
 src-tauri/Cargo.lock
+
+# Python
+venv/
+*.spec
+*.egg-info/
+__pycache__/
 
 # Environment
 .env
@@ -28,3 +35,6 @@ src-tauri/Cargo.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Project
+migrations/
