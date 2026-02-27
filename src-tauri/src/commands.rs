@@ -10,6 +10,21 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+// ─── Helpers ────────────────────────────────────────────────────────
+
+/// Detect common EF Core misconfiguration and return a friendlier message.
+fn enrich_ef_error(raw: &str) -> String {
+    if raw.contains("doesn't match your migrations assembly") {
+        return format!(
+            "Project mismatch: your \"Migrations Project\" may be pointing to the startup/API \
+             project instead of the project that contains your DbContext and migrations. \
+             Check your project configuration and swap them if needed.\n\n{}",
+            raw
+        );
+    }
+    raw.to_string()
+}
+
 // ─── Project Commands ───────────────────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
@@ -517,7 +532,8 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
             &config.project_path,
             &config.db_context,
             &config.startup_project,
-        )?;
+        )
+        .map_err(|e| enrich_ef_error(&e))?;
 
         let mut migrations: Vec<Migration> = Vec::new();
 
@@ -578,10 +594,10 @@ pub async fn add_migration(state: State<'_, AppState>, name: String) -> Result<S
     if result.success {
         Ok(format!("Migration created successfully"))
     } else {
-        Err(format!(
+        Err(enrich_ef_error(&format!(
             "Failed to create migration: {}",
             result.error_output()
-        ))
+        )))
     }
 }
 
@@ -606,10 +622,10 @@ pub async fn remove_migration(state: State<'_, AppState>, force: bool) -> Result
     if result.success {
         Ok("Last migration removed successfully".to_string())
     } else {
-        Err(format!(
+        Err(enrich_ef_error(&format!(
             "Failed to remove migration: {}",
             result.error_output()
-        ))
+        )))
     }
 }
 
@@ -639,10 +655,10 @@ pub async fn update_database(state: State<'_, AppState>, target: String) -> Resu
             Ok(format!("Database updated to migration: {}", target))
         }
     } else {
-        Err(format!(
+        Err(enrich_ef_error(&format!(
             "Failed to update database: {}",
             result.error_output()
-        ))
+        )))
     }
 }
 

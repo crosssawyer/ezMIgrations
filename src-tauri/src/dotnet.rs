@@ -23,21 +23,26 @@ pub struct CommandResult {
     pub success: bool,
     pub stdout: String,
     pub stderr: String,
+    /// The dotnet ef command that was executed (for diagnostics).
+    pub command_display: String,
 }
 
 impl CommandResult {
     /// Return the most useful error text: stderr if non-empty, otherwise stdout.
-    pub fn error_output(&self) -> &str {
-        if self.stderr.trim().is_empty() {
+    /// Appends the executed command for easier debugging.
+    pub fn error_output(&self) -> String {
+        let body = if self.stderr.trim().is_empty() {
             &self.stdout
         } else {
             &self.stderr
-        }
+        };
+        format!("{}\n\nExecuted: {}", body.trim(), self.command_display)
     }
 }
 
 impl DotnetEf {
-    fn build_ef_command(project_path: &str, args: &[&str], startup_project: &str) -> Command {
+    /// Build the Command and return a human-readable representation of it.
+    fn build_ef_command(project_path: &str, args: &[&str], startup_project: &str) -> (Command, String) {
         let project = Path::new(project_path);
 
         // Derive the solution root (parent of the project directory) and run from there
@@ -45,8 +50,10 @@ impl DotnetEf {
         let solution_dir = project.parent();
 
         let mut cmd = Command::new("dotnet");
+        let mut display_parts: Vec<String> = vec!["dotnet".into(), "ef".into()];
         cmd.arg("ef");
         cmd.args(args);
+        display_parts.extend(args.iter().map(|a| a.to_string()));
 
         if let Some(sol_dir) = solution_dir.filter(|p| p.as_os_str().len() > 0 && p.exists()) {
             cmd.current_dir(sol_dir);
@@ -54,8 +61,12 @@ impl DotnetEf {
             // Use path relative to solution root for --project
             if let Ok(rel) = project.strip_prefix(sol_dir) {
                 cmd.arg("--project").arg(rel);
+                display_parts.push("--project".into());
+                display_parts.push(rel.to_string_lossy().to_string());
             } else {
                 cmd.arg("--project").arg(project_path);
+                display_parts.push("--project".into());
+                display_parts.push(project_path.to_string());
             }
 
             // Use path relative to solution root for --startup-project
@@ -63,18 +74,26 @@ impl DotnetEf {
                 let sp = Path::new(startup_project);
                 if let Ok(rel) = sp.strip_prefix(sol_dir) {
                     cmd.arg("--startup-project").arg(rel);
+                    display_parts.push("--startup-project".into());
+                    display_parts.push(rel.to_string_lossy().to_string());
                 } else {
                     cmd.arg("--startup-project").arg(startup_project);
+                    display_parts.push("--startup-project".into());
+                    display_parts.push(startup_project.to_string());
                 }
             }
         } else {
             cmd.arg("--project").arg(project_path);
+            display_parts.push("--project".into());
+            display_parts.push(project_path.to_string());
             if !startup_project.is_empty() {
                 cmd.arg("--startup-project").arg(startup_project);
+                display_parts.push("--startup-project".into());
+                display_parts.push(startup_project.to_string());
             }
         }
 
-        cmd
+        (cmd, display_parts.join(" "))
     }
 
     fn run_ef(
@@ -82,12 +101,13 @@ impl DotnetEf {
         args: &[&str],
         startup_project: &str,
     ) -> Result<CommandResult, String> {
-        Self::build_ef_command(project_path, args, startup_project)
-            .output()
+        let (mut cmd, command_display) = Self::build_ef_command(project_path, args, startup_project);
+        cmd.output()
             .map(|output| CommandResult {
                 success: output.status.success(),
                 stdout: String::from_utf8_lossy(&output.stdout).to_string(),
                 stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                command_display: command_display.clone(),
             })
             .map_err(|e| format!("Failed to execute dotnet ef: {}", e))
     }
@@ -98,7 +118,7 @@ impl DotnetEf {
         startup_project: &str,
         operation: &str,
     ) -> Result<CommandResult, String> {
-        let mut cmd = Self::build_ef_command(project_path, args, startup_project);
+        let (mut cmd, command_display) = Self::build_ef_command(project_path, args, startup_project);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -193,6 +213,7 @@ impl DotnetEf {
             success: exit_status.success() && !canceled,
             stdout,
             stderr,
+            command_display,
         })
     }
 

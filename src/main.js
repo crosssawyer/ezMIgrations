@@ -589,9 +589,9 @@ function showAddProjectModal() {
       <input type="text" id="modal-project-name" placeholder="My Project" />
     </div>
     <div class="form-group">
-      <label for="modal-project-path">Project Path</label>
+      <label for="modal-project-path">Migrations Project <span class="hint">(contains DbContext &amp; migrations)</span></label>
       <div class="input-with-browse">
-        <input type="text" id="modal-project-path" placeholder="/path/to/project" />
+        <input type="text" id="modal-project-path" placeholder="/path/to/solution/MyApp.Data" />
         <button id="btn-browse-modal-path" class="btn btn-ghost" title="Browse...">Browse</button>
       </div>
     </div>
@@ -600,9 +600,9 @@ function showAddProjectModal() {
       <input type="text" id="modal-db-context" placeholder="ApplicationDbContext" />
     </div>
     <div class="form-group">
-      <label for="modal-startup-project">Startup Project <span class="hint">(optional)</span></label>
+      <label for="modal-startup-project">Startup Project <span class="hint">(optional &mdash; the executable project, e.g. your API)</span></label>
       <div class="input-with-browse">
-        <input type="text" id="modal-startup-project" placeholder="/path/to/startup/project" />
+        <input type="text" id="modal-startup-project" placeholder="/path/to/solution/MyApp.Api" />
         <button id="btn-browse-modal-startup" class="btn btn-ghost" title="Browse...">Browse</button>
       </div>
     </div>
@@ -640,7 +640,7 @@ function showEditProjectModal(project) {
       <input type="text" id="modal-project-name" value="${escapeHtml(project.name)}" />
     </div>
     <div class="form-group">
-      <label for="modal-project-path">Project Path</label>
+      <label for="modal-project-path">Migrations Project <span class="hint">(contains DbContext &amp; migrations)</span></label>
       <div class="input-with-browse">
         <input type="text" id="modal-project-path" value="${escapeHtml(project.project_path)}" />
         <button id="btn-browse-modal-path" class="btn btn-ghost" title="Browse...">Browse</button>
@@ -651,7 +651,7 @@ function showEditProjectModal(project) {
       <input type="text" id="modal-db-context" value="${escapeHtml(project.db_context)}" />
     </div>
     <div class="form-group">
-      <label for="modal-startup-project">Startup Project <span class="hint">(optional)</span></label>
+      <label for="modal-startup-project">Startup Project <span class="hint">(optional &mdash; the executable project, e.g. your API)</span></label>
       <div class="input-with-browse">
         <input type="text" id="modal-startup-project" value="${escapeHtml(project.startup_project)}" />
         <button id="btn-browse-modal-startup" class="btn btn-ghost" title="Browse...">Browse</button>
