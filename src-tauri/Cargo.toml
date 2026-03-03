@@ -1,6 +1,6 @@
 [package]
 name = "ez-migrations"
-version = "0.1.0"
+version = "0.3.0"
 description = "A lightweight Tauri app for managing .NET EF Core migrations"
 authors = ["ezMigrations"]
 edition = "2021"

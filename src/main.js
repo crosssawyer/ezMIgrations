@@ -9,6 +9,9 @@ let checkedMigrations = new Set();
 let savedProjects = [];
 let activeProjectId = null;
 let stableMigration = null;
+let dbConnected = false;
+let lastDbUpdate = null;
+let searchQuery = "";
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
 
@@ -28,6 +31,13 @@ const operationOverlay = $("#operation-overlay");
 const operationCancelBtn = $("#btn-cancel-operation");
 const savedProjectsList = $("#saved-projects-list");
 const noProjectsState = $("#no-projects-state");
+const healthIndicator = $("#health-indicator");
+const pendingBadge = $("#pending-badge");
+const driftWarning = $("#drift-warning");
+const statusBar = $("#status-bar");
+const statusBarText = $("#status-bar-text");
+const searchInput = $("#search-input");
+const hotkeysOverlay = $("#hotkeys-overlay");
 
 // ─── Init ───────────────────────────────────────────────────────────
 
@@ -67,12 +77,22 @@ function bindEvents() {
   $("#btn-close-settings").addEventListener("click", closeSettings);
   $("#btn-add-project").addEventListener("click", showAddProjectModal);
 
+  // Hotkeys popup
+  $("#btn-hotkeys").addEventListener("click", toggleHotkeys);
+  $("#btn-close-hotkeys").addEventListener("click", closeHotkeys);
+  hotkeysOverlay.addEventListener("click", (e) => {
+    if (e.target === hotkeysOverlay) closeHotkeys();
+  });
+
   // Toolbar
   $("#btn-add").addEventListener("click", showAddModal);
   $("#btn-squash").addEventListener("click", showSquashModal);
   $("#btn-update-latest").addEventListener("click", updateToLatest);
   $("#btn-change-project").addEventListener("click", showSetup);
   $("#btn-refresh").addEventListener("click", refreshMigrations);
+
+  // Drift banner
+  $("#btn-drift-update").addEventListener("click", updateToLatest);
 
   // Detail panel
   $("#btn-close-detail").addEventListener("click", closeDetail);
@@ -99,6 +119,89 @@ function bindEvents() {
 
   // Operation overlay
   operationCancelBtn?.addEventListener("click", cancelRunningOperation);
+
+  // Search input
+  searchInput.addEventListener("input", () => {
+    searchQuery = searchInput.value;
+    renderMigrations();
+  });
+
+  // Keyboard shortcuts
+  document.addEventListener("keydown", handleKeyboard);
+}
+
+// ─── Keyboard Shortcuts ─────────────────────────────────────────────
+
+function handleKeyboard(e) {
+  const mod = e.ctrlKey || e.metaKey;
+  const tag = document.activeElement?.tagName;
+  const inInput = tag === "INPUT" || tag === "TEXTAREA";
+  const overlayVisible = !operationOverlay.classList.contains("hidden");
+  const mainVisible = !mainContent.classList.contains("hidden");
+
+  // Escape always fires
+  if (e.key === "Escape") {
+    // If hotkeys popup is open, close it first
+    if (!hotkeysOverlay.classList.contains("hidden")) {
+      closeHotkeys();
+      return;
+    }
+    // If search input is focused, clear and blur
+    if (document.activeElement === searchInput) {
+      searchQuery = "";
+      searchInput.value = "";
+      searchInput.blur();
+      renderMigrations();
+      return;
+    }
+    // Priority chain: modal → detail → settings
+    if (!modalOverlay.classList.contains("hidden")) {
+      closeModal();
+    } else if (!detailPanel.classList.contains("hidden")) {
+      closeDetail();
+    } else if (!settingsPanel.classList.contains("hidden")) {
+      closeSettings();
+    }
+    return;
+  }
+
+  // Skip modifier shortcuts during operations or when not on main screen
+  if (overlayVisible || !mainVisible) return;
+
+  // Skip Ctrl+key shortcuts when typing in an input
+  if (mod && !inInput) {
+    if (e.key === "n" || e.key === "N") {
+      e.preventDefault();
+      showAddModal();
+      return;
+    }
+    if (e.key === "r" || e.key === "R") {
+      e.preventDefault();
+      refreshMigrations();
+      return;
+    }
+  }
+
+  if (mod && (e.key === "f" || e.key === "F")) {
+    e.preventDefault();
+    searchInput.focus();
+    searchInput.select();
+    return;
+  }
+
+  // ? toggles hotkeys help (only when not typing)
+  if (e.key === "?" && !inInput) {
+    toggleHotkeys();
+    return;
+  }
+}
+
+function toggleHotkeys() {
+  hotkeysOverlay.classList.toggle("hidden");
+}
+
+function closeHotkeys() {
+  hotkeysOverlay.classList.add("hidden");
 }
 
 // ─── Browse ─────────────────────────────────────────────────────────
@@ -171,10 +274,13 @@ async function refreshMigrations() {
 
   try {
     migrations = await invoke("list_migrations");
+    dbConnected = true;
     renderMigrations();
   } catch (err) {
+    dbConnected = false;
     toast("Failed to load migrations: " + err, "error");
   } finally {
+    updateStatusIndicators();
     loadingState.classList.add("hidden");
     setToolbarDisabled(false);
   }
@@ -183,14 +289,26 @@ async function refreshMigrations() {
 function renderMigrations() {
   migrationTbody.innerHTML = "";
 
+  const query = searchQuery.trim().toLowerCase();
+  const filtered = query
+    ? migrations.filter((m) => m.name.toLowerCase().includes(query))
+    : migrations;
+
   if (migrations.length === 0) {
+    emptyState.innerHTML = "<p>No migrations found. Create one to get started.</p>";
+    emptyState.classList.remove("hidden");
+    return;
+  }
+
+  if (filtered.length === 0) {
+    emptyState.innerHTML = "<p>No migrations match your filter.</p>";
     emptyState.classList.remove("hidden");
     return;
   }
 
   emptyState.classList.add("hidden");
 
-  migrations.forEach((m) => {
+  filtered.forEach((m) => {
     const tr = document.createElement("tr");
     const isStable = stableMigration === m.name;
     if (selectedMigration && selectedMigration.id === m.id) {
@@ -437,6 +555,7 @@ async function updateToLatest() {
   showOverlay("Updating database...", { cancelable: true });
   try {
     const result = await invoke("update_database", { target: "" });
+    lastDbUpdate = Date.now();
     toast(result, "success");
     await refreshMigrations();
   } catch (err) {
@@ -450,6 +569,7 @@ async function applyUpTo(migration) {
   showOverlay(`Updating to ${migration.name}...`, { cancelable: true });
   try {
     const result = await invoke("update_database", { target: migration.name });
+    lastDbUpdate = Date.now();
     toast(result, "success");
     await refreshMigrations();
   } catch (err) {
@@ -873,6 +993,54 @@ function toast(message, type = "info") {
     el.style.transition = "opacity 0.2s";
     setTimeout(() => el.remove(), 200);
   }, 4000);
+}
+
+// ─── Status Indicators ──────────────────────────────────────────────
+
+function updateStatusIndicators() {
+  // Health dot
+  healthIndicator.classList.remove("health-ok", "health-error");
+  if (dbConnected) {
+    healthIndicator.classList.add("health-ok");
+    healthIndicator.title = "Connected";
+  } else {
+    healthIndicator.classList.add("health-error");
+    healthIndicator.title = "Connection error";
+  }
+
+  // Pending badge
+  const pendingCount = migrations.filter((m) => !m.applied).length;
+  if (pendingCount > 0) {
+    pendingBadge.textContent = `${pendingCount} pending`;
+    pendingBadge.classList.remove("hidden");
+  } else {
+    pendingBadge.classList.add("hidden");
+  }
+
+  // Drift warning banner
+  if (pendingCount > 0 && dbConnected) {
+    driftWarning.classList.remove("hidden");
+  } else {
+    driftWarning.classList.add("hidden");
+  }
+
+  // Status bar
+  if (lastDbUpdate) {
+    statusBar.classList.remove("hidden");
+    statusBarText.textContent = "Last DB update: " + formatRelativeTime(lastDbUpdate);
+  }
+}
+
+function formatRelativeTime(timestamp) {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 // ─── Util ───────────────────────────────────────────────────────────

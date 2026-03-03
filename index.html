@@ -12,11 +12,15 @@
       <header id="header">
         <div class="header-left">
           <h1>ezMigrations</h1>
+          <span class="version-label">v0.3.0</span>
+          <span id="health-indicator" class="health-dot" title="Disconnected"></span>
         </div>
         <div class="header-right">
+          <span id="pending-badge" class="badge badge-pending hidden"></span>
           <span id="branch-badge" class="badge hidden"></span>
+          <button id="btn-hotkeys" class="icon-btn" title="Keyboard shortcuts (?)">?</button>
           <button id="btn-settings" class="icon-btn" title="Settings">&#x2699;</button>
-          <button id="btn-refresh" class="icon-btn" title="Refresh migrations">&#x21bb;</button>
+          <button id="btn-refresh" class="icon-btn" title="Refresh migrations (Ctrl+R)">&#x21bb;</button>
         </div>
       </header>
 
@@ -48,10 +52,18 @@
       <main id="main-content" class="hidden">
         <!-- Toolbar -->
         <div id="toolbar">
-          <button id="btn-add" class="btn btn-success" title="Add new migration">+ New</button>
+          <button id="btn-add" class="btn btn-success" title="Add new migration (Ctrl+N)">+ New</button>
           <button id="btn-squash" class="btn btn-warning" title="Squash selected migrations">Squash</button>
           <button id="btn-update-latest" class="btn btn-primary" title="Update database to latest">Update DB</button>
+          <input type="text" id="search-input" placeholder="Filter migrations..." />
           <button id="btn-change-project" class="btn btn-ghost" title="Change project">Change Project</button>
+        </div>
+
+        <!-- Drift Warning Banner -->
+        <div id="drift-warning" class="drift-banner hidden">
+          <span class="drift-icon">&#x26A0;</span>
+          <span class="drift-text">Database is out of sync — pending migrations need to be applied.</span>
+          <button id="btn-drift-update" class="btn btn-sm btn-warning">Update Now</button>
         </div>
 
         <!-- Migration List -->
@@ -75,6 +87,11 @@
             <div class="spinner"></div>
             <p>Loading migrations...</p>
           </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div id="status-bar" class="status-bar hidden">
+          <span id="status-bar-text"></span>
         </div>
 
         <!-- Detail Panel (shown when a migration is selected) -->
@@ -136,6 +153,23 @@
         <div class="spinner spinner-lg"></div>
         <p id="operation-message">Working...</p>
         <button id="btn-cancel-operation" class="btn btn-sm btn-ghost hidden">Cancel</button>
+      </div>
+
+      <!-- Hotkeys Popup -->
+      <div id="hotkeys-overlay" class="hidden">
+        <div class="hotkeys-popup">
+          <div class="hotkeys-header">
+            <h3>Keyboard Shortcuts</h3>
+            <button id="btn-close-hotkeys" class="icon-btn">&times;</button>
+          </div>
+          <div class="hotkeys-body">
+            <div class="hotkey-row"><kbd>Ctrl+N</kbd><span>New migration</span></div>
+            <div class="hotkey-row"><kbd>Ctrl+R</kbd><span>Refresh migrations</span></div>
+            <div class="hotkey-row"><kbd>Ctrl+F</kbd><span>Focus search / filter</span></div>
+            <div class="hotkey-row"><kbd>Esc</kbd><span>Close panel / clear search</span></div>
+            <div class="hotkey-row"><kbd>?</kbd><span>Toggle this help</span></div>
+          </div>
+        </div>
       </div>
 
       <!-- Toast notifications -->
