@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -49,4 +50,5 @@ pub struct AppState {
     pub current_branch: Mutex<String>,
     pub watching: Mutex<bool>,
     pub watching_migrations: Mutex<bool>,
+    pub watcher_cancel: Mutex<Arc<AtomicBool>>,
 }

@@ -487,6 +487,13 @@ pub async fn switch_project(
 
     *state.config.lock().unwrap() = Some(config);
     *state.current_branch.lock().unwrap() = branch.clone();
+
+    // Signal old watcher threads to stop, then reset flags for new watchers
+    {
+        let mut cancel = state.watcher_cancel.lock().unwrap();
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        *cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    }
     *state.watching.lock().unwrap() = false;
     *state.watching_migrations.lock().unwrap() = false;
 
@@ -535,12 +542,21 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
         )
         .map_err(|e| enrich_ef_error(&e))?;
 
+        // Cache all migration files once instead of scanning the directory per migration
+        let all_files = MigrationParser::find_migration_files(&config.project_path)
+            .unwrap_or_default();
+
         let mut migrations: Vec<Migration> = Vec::new();
 
         for (name, applied) in &ef_migrations {
-            let file_path = MigrationParser::get_migration_file(&config.project_path, name);
+            let file_path = all_files.iter().find(|f| {
+                f.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.contains(name) || name.contains(s))
+                    .unwrap_or(false)
+            });
 
-            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(ref fp) = file_path {
+            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(fp) = file_path {
                 match MigrationParser::parse_file(fp) {
                     Ok(parsed) => (
                         parsed.has_custom_sql,
@@ -917,11 +933,10 @@ pub async fn start_branch_watcher(
         }
     }
 
+    let cancel_token = state.watcher_cancel.lock().unwrap().clone();
     *state.watching.lock().unwrap() = true;
 
     let project_path = config.project_path.clone();
-    let db_context = config.db_context.clone();
-    let startup_project = config.startup_project.clone();
     let head_path_clone = head_path.clone();
 
     thread::spawn(move || {
@@ -940,13 +955,48 @@ pub async fn start_branch_watcher(
             return;
         }
 
+        let head_file = Path::new(&head_path_clone)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
         let mut last_branch = GitService::get_current_branch(&project_path).unwrap_or_default();
+        let mut last_check = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))
+            .unwrap_or_else(std::time::Instant::now);
 
         loop {
-            match rx.recv() {
-                Ok(_event) => {
-                    // Small delay to let git finish writing
+            // Check cancellation
+            if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(Ok(event)) => {
+                    // Only react to HEAD file changes
+                    let is_head = event.paths.iter().any(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n == head_file)
+                            .unwrap_or(false)
+                    });
+                    if !is_head {
+                        continue;
+                    }
+
+                    // Debounce
+                    let now = std::time::Instant::now();
+                    if now.duration_since(last_check) < std::time::Duration::from_secs(2) {
+                        continue;
+                    }
+                    last_check = now;
+
+                    // Delay to let git finish writing
                     thread::sleep(std::time::Duration::from_millis(500));
+
+                    // Drain queued events
+                    while rx.try_recv().is_ok() {}
 
                     if let Ok(new_branch) = GitService::get_current_branch(&project_path) {
                         if new_branch != last_branch {
@@ -963,7 +1013,9 @@ pub async fn start_branch_watcher(
                         }
                     }
                 }
-                Err(_) => break,
+                Ok(Err(_)) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
@@ -997,6 +1049,7 @@ pub async fn start_migration_watcher(
         }
     }
 
+    let cancel_token = state.watcher_cancel.lock().unwrap().clone();
     *state.watching_migrations.lock().unwrap() = true;
 
     let migrations_dir_str = migrations_dir.to_string_lossy().to_string();
@@ -1019,33 +1072,44 @@ pub async fn start_migration_watcher(
         let mut last_emit = std::time::Instant::now();
 
         loop {
-            match rx.recv() {
+            // Check cancellation
+            if cancel_token.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            match rx.recv_timeout(std::time::Duration::from_secs(2)) {
                 Ok(Ok(event)) => {
-                    // Only react to .cs file changes
-                    let has_cs = event
-                        .paths
-                        .iter()
-                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("cs"));
-                    if !has_cs {
+                    // Only react to main migration .cs files (skip .Designer.cs and snapshots)
+                    let has_migration_cs = event.paths.iter().any(|p| {
+                        let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                        name.ends_with(".cs")
+                            && !name.ends_with(".Designer.cs")
+                            && !name.contains("ModelSnapshot")
+                    });
+                    if !has_migration_cs {
                         continue;
                     }
 
-                    // Debounce: skip if less than 1 second since last emit
+                    // Debounce: skip if less than 3 seconds since last emit
                     let now = std::time::Instant::now();
-                    if now.duration_since(last_emit) < std::time::Duration::from_secs(1) {
+                    if now.duration_since(last_emit) < std::time::Duration::from_secs(3) {
                         continue;
                     }
                     last_emit = now;
 
-                    // Small delay to let file operations finish
+                    // Delay to let file operations finish
                     thread::sleep(std::time::Duration::from_millis(500));
+
+                    // Drain any events that queued during the sleep
+                    while rx.try_recv().is_ok() {}
 
                     let _ = app.emit("migrations-changed", ());
                 }
                 Ok(Err(e)) => {
                     eprintln!("Migration watcher error: {}", e);
                 }
-                Err(_) => break,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });

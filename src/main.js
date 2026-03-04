@@ -12,6 +12,8 @@ let stableMigration = null;
 let dbConnected = false;
 let lastDbUpdate = null;
 let searchQuery = "";
+let isRefreshing = false;
+let refreshQueued = false;
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
 
@@ -267,6 +269,13 @@ function showSetup() {
 // ─── Migrations ─────────────────────────────────────────────────────
 
 async function refreshMigrations() {
+  if (isRefreshing) {
+    refreshQueued = true;
+    return;
+  }
+
+  isRefreshing = true;
+  refreshQueued = false;
   loadingState.classList.remove("hidden");
   emptyState.classList.add("hidden");
   migrationTbody.innerHTML = "";
@@ -283,6 +292,12 @@ async function refreshMigrations() {
     updateStatusIndicators();
     loadingState.classList.add("hidden");
     setToolbarDisabled(false);
+    isRefreshing = false;
+
+    if (refreshQueued) {
+      refreshQueued = false;
+      refreshMigrations();
+    }
   }
 }
 
