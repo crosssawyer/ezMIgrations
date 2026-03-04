@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "ezMIgrations"
-version = "0.3.0"
+version = "0.3.1"
 description = "A python helper to make squashing migrations in EF much easier."
 readme = "README.md"
 requires-python = ">=3.10"

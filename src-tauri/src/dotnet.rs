@@ -1,3 +1,4 @@
+use std::env;
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -50,6 +51,27 @@ impl DotnetEf {
         let solution_dir = project.parent();
 
         let mut cmd = Command::new("dotnet");
+
+        // macOS GUI apps inherit a minimal PATH that doesn't include dotnet.
+        // Enrich PATH with common dotnet install locations so the command resolves.
+        if let Ok(current_path) = env::var("PATH") {
+            let home = env::var("HOME").unwrap_or_default();
+            let extra_paths = [
+                format!("{}/.dotnet/tools", home),
+                format!("{}/.dotnet", home),
+                "/usr/local/share/dotnet".to_string(),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+            ];
+            let enriched = extra_paths
+                .iter()
+                .chain(std::iter::once(&current_path))
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(":");
+            cmd.env("PATH", enriched);
+        }
+
         let mut display_parts: Vec<String> = vec!["dotnet".into(), "ef".into()];
         cmd.arg("ef");
         cmd.args(args);
