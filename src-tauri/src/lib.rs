@@ -2,6 +2,7 @@ mod commands;
 mod dotnet;
 mod git;
 mod parser;
+mod process;
 mod state;
 
 use state::AppState;

@@ -1,12 +1,13 @@
 use std::path::Path;
-use std::process::Command;
+
+use crate::process::command;
 
 pub struct GitService;
 
 impl GitService {
     /// Get the current branch name for a repository at the given path.
     pub fn get_current_branch(repo_path: &str) -> Result<String, String> {
-        let output = Command::new("git")
+        let output = command("git")
             .args(["rev-parse", "--abbrev-ref", "HEAD"])
             .current_dir(repo_path)
             .output()
@@ -53,7 +54,7 @@ impl GitService {
         to_branch: &str,
     ) -> Result<Vec<String>, String> {
         let range = format!("{}...{}", from_branch, to_branch);
-        let output = Command::new("git")
+        let output = command("git")
             .args(["diff", "--name-only", &range, "--", "*/Migrations/*"])
             .current_dir(repo_path)
             .output()
