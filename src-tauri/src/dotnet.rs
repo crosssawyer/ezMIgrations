@@ -6,6 +6,12 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 pub struct DotnetEf;
 
 struct RunningEfProcess {
@@ -51,6 +57,10 @@ impl DotnetEf {
         let solution_dir = project.parent();
 
         let mut cmd = Command::new("dotnet");
+
+        // Hide the console window on Windows so it doesn't flash over the app.
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
 
         // macOS GUI apps inherit a minimal PATH that doesn't include dotnet.
         // Enrich PATH with common dotnet install locations so the command resolves.
