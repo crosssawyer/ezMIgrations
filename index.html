@@ -12,7 +12,7 @@
       <header id="header">
         <div class="header-left">
           <h1>ezMigrations</h1>
-          <span class="version-label">v0.4.0</span>
+          <span class="version-label">v0.5.0</span>
           <span id="health-indicator" class="health-dot" title="Disconnected"></span>
         </div>
         <div class="header-right">
@@ -64,6 +64,17 @@
           <span class="drift-icon">&#x26A0;</span>
           <span class="drift-text">Database is out of sync — pending migrations need to be applied.</span>
           <button id="btn-drift-update" class="btn btn-sm btn-warning">Update Now</button>
+        </div>
+
+        <!-- Sync Warning Banner -->
+        <div id="sync-warning" class="sync-banner hidden">
+          <span class="sync-icon">&#x26A0;</span>
+          <span class="sync-text">
+            Out-of-sync — <span id="sync-count"></span> migration(s) from
+            <strong id="sync-branch">another branch</strong> are still applied.
+          </span>
+          <button id="btn-sync-revert" class="btn btn-sm btn-danger">Revert Foreign</button>
+          <button id="btn-sync-dismiss" class="btn btn-sm btn-ghost">Dismiss</button>
         </div>
 
         <!-- Migration List -->
@@ -129,6 +140,22 @@
           <div id="saved-projects-list"></div>
           <div id="no-projects-state" class="hidden">
             <p>No saved projects yet. Add one to get started.</p>
+          </div>
+
+          <div class="settings-divider"></div>
+
+          <div class="settings-section-header">
+            <h3>Preferences</h3>
+          </div>
+          <div class="pref-row">
+            <label class="toggle-label" for="pref-notify-branch">
+              <span class="toggle-text">Notify on branch change</span>
+              <span class="toggle-hint">Show a prompt to update the database when switching git branches</span>
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="pref-notify-branch" checked />
+              <span class="toggle-slider"></span>
+            </label>
           </div>
         </div>
       </section>

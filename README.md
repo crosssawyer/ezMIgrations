@@ -4,13 +4,18 @@ A fast, lightweight desktop app for managing .NET Entity Framework Core migratio
 
 ## Features
 
-- **Migration tracking** - See all migrations with applied/pending status at a glance
-- **Custom SQL capture** - Automatically extracts `migrationBuilder.Sql()` calls from migration files
-- **Squash migrations** - Consolidate multiple migrations into one while preserving custom SQL
-- **Git branch awareness** - Watches for branch changes and prompts to update the database accordingly
-- **Create / delete migrations** - One-click migration management through `dotnet ef`
-- **Update database** - Apply up to any migration or update to latest
-- **SQL script generation** - Generate SQL scripts between migration points
+- **Migration tracking** — See all migrations with applied/pending status at a glance
+- **Custom SQL capture** — Automatically extracts `migrationBuilder.Sql()` calls from migration files
+- **Squash migrations** — Consolidate multiple migrations into one while preserving custom SQL
+- **Git branch awareness** — Watches for branch changes and prompts to update the database accordingly
+- **Out-of-sync detection** — Detects foreign migrations left over from other branches, highlights them in the list, and offers a one-click revert
+- **Stable migration** — Pin a migration as a safe rollback point for branch switches
+- **Create / delete migrations** — One-click migration management through `dotnet ef`
+- **Update database** — Apply up to any migration or update to latest
+- **SQL script generation** — Generate SQL scripts between migration points
+- **Multi-project support** — Save and switch between multiple EF projects from the settings panel
+- **Preferences** — Configure notifications (e.g. disable branch-change prompts)
+- **Keyboard shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `?` help
 
 ## Prerequisites
 
@@ -45,7 +50,8 @@ src-tauri/           Rust backend (Tauri v2)
     dotnet.rs        dotnet ef CLI wrapper
     git.rs           Git operations + branch detection
     parser.rs        C# migration file parser
-    state.rs         App state models
+    process.rs       Cross-platform subprocess helper
+    state.rs         App state & config models
 src/                 Frontend (vanilla JS)
   main.js           App logic + UI
   style.css         Dark theme styling

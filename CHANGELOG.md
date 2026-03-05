@@ -2,6 +2,16 @@
 
 All notable changes to ezMigrations are documented here.
 
+## [0.5.0] - 2026-03-05
+
+### Added
+- **Out-of-sync detection** — detects "foreign" migrations applied from another branch (Applied after Pending), shows a red warning banner with count and source branch name
+- **Foreign migration highlighting** — foreign rows get a red left border and "Foreign" label in the migration list
+- **One-click revert** — "Revert Foreign" button reverts the database to the last clean migration before the foreign ones
+- **Dismiss sync warning** — dismiss button hides the banner for the session; reappears on next branch change
+- **Preferences panel** — new Preferences section in Settings with a toggle to disable branch-change notification prompts
+- **Persisted preferences** — preferences saved to `app_config.json` via new `get_preferences` / `set_preferences` backend commands
+
 ## [0.4.0] - 2026-03-04
 
 ### Performance

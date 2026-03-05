@@ -19,10 +19,30 @@ pub struct SavedProject {
     pub stable_migration: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Preferences {
+    #[serde(default = "default_true")]
+    pub notify_on_branch_change: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            notify_on_branch_change: true,
+        }
+    }
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub projects: Vec<SavedProject>,
     pub active_project_id: Option<String>,
+    #[serde(default)]
+    pub preferences: Preferences,
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

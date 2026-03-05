@@ -32,6 +32,8 @@ pub fn run() {
             commands::switch_project,
             commands::set_stable_migration,
             commands::start_migration_watcher,
+            commands::get_preferences,
+            commands::set_preferences,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

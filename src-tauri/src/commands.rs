@@ -1,7 +1,7 @@
 use crate::dotnet::DotnetEf;
 use crate::git::GitService;
 use crate::parser::MigrationParser;
-use crate::state::{AppConfig, AppState, Migration, ProjectConfig, SavedProject};
+use crate::state::{AppConfig, AppState, Migration, Preferences, ProjectConfig, SavedProject};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -107,6 +107,7 @@ fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig>
     let app_config = AppConfig {
         projects: vec![saved],
         active_project_id: Some(id),
+        preferences: Preferences::default(),
     };
 
     // Persist + load into state
@@ -521,6 +522,26 @@ pub async fn set_stable_migration(
         .find(|p| p.id == active_id)
         .ok_or("Active project not found")?;
     proj.stable_migration = migration_name;
+    save_app_config(&app, &ac)?;
+    Ok(())
+}
+
+// ─── Preferences Commands ───────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_preferences(state: State<'_, AppState>) -> Result<Preferences, String> {
+    let ac = state.app_config.lock().unwrap();
+    Ok(ac.preferences.clone())
+}
+
+#[tauri::command]
+pub async fn set_preferences(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    preferences: Preferences,
+) -> Result<(), String> {
+    let mut ac = state.app_config.lock().unwrap();
+    ac.preferences = preferences;
     save_app_config(&app, &ac)?;
     Ok(())
 }

@@ -14,6 +14,9 @@ let lastDbUpdate = null;
 let searchQuery = "";
 let isRefreshing = false;
 let refreshQueued = false;
+let previousBranch = null;
+let syncDismissed = false;
+let preferences = { notify_on_branch_change: true };
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
 
@@ -36,6 +39,7 @@ const noProjectsState = $("#no-projects-state");
 const healthIndicator = $("#health-indicator");
 const pendingBadge = $("#pending-badge");
 const driftWarning = $("#drift-warning");
+const syncWarning = $("#sync-warning");
 const statusBar = $("#status-bar");
 const statusBarText = $("#status-bar-text");
 const searchInput = $("#search-input");
@@ -45,9 +49,24 @@ const hotkeysOverlay = $("#hotkeys-overlay");
 
 async function init() {
   bindEvents();
+  await loadPreferences();
   await checkExistingProject();
   listenForBranchChanges();
   listenForMigrationChanges();
+}
+
+async function loadPreferences() {
+  try {
+    preferences = await invoke("get_preferences");
+    applyPreferencesToUI();
+  } catch (_) {
+    // Use defaults
+  }
+}
+
+function applyPreferencesToUI() {
+  const toggle = $("#pref-notify-branch");
+  if (toggle) toggle.checked = preferences.notify_on_branch_change;
 }
 
 async function checkExistingProject() {
@@ -95,6 +114,23 @@ function bindEvents() {
 
   // Drift banner
   $("#btn-drift-update").addEventListener("click", updateToLatest);
+
+  // Sync banner
+  $("#btn-sync-revert").addEventListener("click", revertForeignMigrations);
+  $("#btn-sync-dismiss").addEventListener("click", () => {
+    syncDismissed = true;
+    syncWarning.classList.add("hidden");
+  });
+
+  // Preferences
+  $("#pref-notify-branch").addEventListener("change", async (e) => {
+    preferences.notify_on_branch_change = e.target.checked;
+    try {
+      await invoke("set_preferences", { preferences });
+    } catch (err) {
+      toast("Failed to save preferences: " + err, "error");
+    }
+  });
 
   // Detail panel
   $("#btn-close-detail").addEventListener("click", closeDetail);
@@ -323,14 +359,21 @@ function renderMigrations() {
 
   emptyState.classList.add("hidden");
 
+  const syncInfo = detectOutOfSync();
+  const foreignNames = new Set(syncInfo.foreignMigrations.map((fm) => fm.name));
+
   filtered.forEach((m) => {
     const tr = document.createElement("tr");
     const isStable = stableMigration === m.name;
+    const isForeign = foreignNames.has(m.name);
     if (selectedMigration && selectedMigration.id === m.id) {
       tr.classList.add("selected");
     }
     if (isStable) {
       tr.classList.add("migration-stable");
+    }
+    if (isForeign) {
+      tr.classList.add("migration-foreign");
     }
 
     tr.innerHTML = `
@@ -340,6 +383,7 @@ function renderMigrations() {
       <td>
         <span class="migration-name" data-id="${m.id}">${m.name}</span>
         ${isStable ? '<span class="stable-indicator">Stable</span>' : ""}
+        ${isForeign ? '<span class="foreign-indicator">Foreign</span>' : ""}
       </td>
       <td>
         <span class="${m.applied ? "status-applied" : "status-pending"}">
@@ -640,6 +684,7 @@ function showSettings() {
   setupPanel.classList.add("hidden");
   settingsPanel.classList.remove("hidden");
   loadSavedProjects();
+  applyPreferencesToUI();
 }
 
 function closeSettings() {
@@ -707,6 +752,8 @@ async function switchToProject(project) {
     const info = await invoke("switch_project", { id: project.id });
     activeProjectId = info.id;
     stableMigration = info.stable_migration || null;
+    syncDismissed = false;
+    previousBranch = null;
     settingsPanel.classList.add("hidden");
     showMain(info);
     toast(`Switched to ${project.name}`, "success");
@@ -889,7 +936,16 @@ function listenForMigrationChanges() {
 function listenForBranchChanges() {
   listen("branch-changed", (event) => {
     const { old_branch, new_branch, reverted_to_stable } = event.payload;
+    previousBranch = old_branch;
+    syncDismissed = false;
     branchBadge.textContent = new_branch;
+
+    // Always refresh migrations so status indicators update
+    refreshMigrations();
+
+    if (!preferences.notify_on_branch_change) {
+      return;
+    }
 
     if (reverted_to_stable) {
       // Backend already reverted to stable using the old compiled assembly.
@@ -1010,6 +1066,46 @@ function toast(message, type = "info") {
   }, 4000);
 }
 
+// ─── Out-of-Sync Detection ──────────────────────────────────────────
+
+function detectOutOfSync() {
+  let firstPendingIdx = -1;
+  const foreignMigrations = [];
+
+  for (let i = 0; i < migrations.length; i++) {
+    if (!migrations[i].applied && firstPendingIdx === -1) {
+      firstPendingIdx = i;
+    } else if (migrations[i].applied && firstPendingIdx !== -1) {
+      foreignMigrations.push(migrations[i]);
+    }
+  }
+
+  return {
+    isOutOfSync: foreignMigrations.length > 0,
+    foreignMigrations,
+    firstPendingIdx,
+  };
+}
+
+async function revertForeignMigrations() {
+  const { isOutOfSync, firstPendingIdx } = detectOutOfSync();
+  if (!isOutOfSync) return;
+
+  const target = firstPendingIdx === 0 ? "0" : migrations[firstPendingIdx - 1].name;
+
+  showOverlay("Reverting foreign migrations...", { cancelable: true });
+  try {
+    const result = await invoke("update_database", { target });
+    syncDismissed = false;
+    toast(result, "success");
+    await refreshMigrations();
+  } catch (err) {
+    toast(err, "error");
+  } finally {
+    hideOverlay();
+  }
+}
+
 // ─── Status Indicators ──────────────────────────────────────────────
 
 function updateStatusIndicators() {
@@ -1032,11 +1128,21 @@ function updateStatusIndicators() {
     pendingBadge.classList.add("hidden");
   }
 
-  // Drift warning banner
-  if (pendingCount > 0 && dbConnected) {
-    driftWarning.classList.remove("hidden");
-  } else {
+  // Out-of-sync detection (takes precedence over drift)
+  const sync = detectOutOfSync();
+  if (sync.isOutOfSync && !syncDismissed) {
+    syncWarning.classList.remove("hidden");
+    $("#sync-count").textContent = sync.foreignMigrations.length;
+    $("#sync-branch").textContent = previousBranch || "another branch";
     driftWarning.classList.add("hidden");
+  } else {
+    syncWarning.classList.add("hidden");
+    // Drift warning banner
+    if (pendingCount > 0 && dbConnected) {
+      driftWarning.classList.remove("hidden");
+    } else {
+      driftWarning.classList.add("hidden");
+    }
   }
 
   // Status bar
