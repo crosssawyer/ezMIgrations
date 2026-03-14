@@ -46,28 +46,4 @@ impl GitService {
                 .to_string()
         })
     }
-
-    /// Get list of files that changed between two branches (migration-relevant files only).
-    pub fn get_migration_diff(
-        repo_path: &str,
-        from_branch: &str,
-        to_branch: &str,
-    ) -> Result<Vec<String>, String> {
-        let range = format!("{}...{}", from_branch, to_branch);
-        let output = command("git")
-            .args(["diff", "--name-only", &range, "--", "*/Migrations/*"])
-            .current_dir(repo_path)
-            .output()
-            .map_err(|e| format!("Failed to run git diff: {}", e))?;
-
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .map(|s| s.to_string())
-                .collect())
-        } else {
-            // Non-fatal: just return empty if comparison fails
-            Ok(Vec::new())
-        }
-    }
 }

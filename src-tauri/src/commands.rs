@@ -6,6 +6,7 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::mpsc::channel;
+use std::sync::{Arc, atomic::AtomicBool};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -76,6 +77,38 @@ fn derive_project_name(project_path: &str) -> String {
         .unwrap_or_else(|| "My Project".to_string())
 }
 
+fn ensure_path_exists(path: &str) -> Result<(), String> {
+    if Path::new(path).exists() {
+        Ok(())
+    } else {
+        Err(format!("Path does not exist: {}", path))
+    }
+}
+
+fn reset_watchers(state: &AppState) {
+    {
+        let mut cancel = state.watcher_cancel.lock().unwrap();
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        *cancel = Arc::new(AtomicBool::new(false));
+    }
+    *state.watching.lock().unwrap() = false;
+    *state.watching_migrations.lock().unwrap() = false;
+}
+
+fn clear_branch_watcher_if_current(state: &AppState, cancel_token: &Arc<AtomicBool>) {
+    let current = state.watcher_cancel.lock().unwrap().clone();
+    if Arc::ptr_eq(&current, cancel_token) {
+        *state.watching.lock().unwrap() = false;
+    }
+}
+
+fn clear_migration_watcher_if_current(state: &AppState, cancel_token: &Arc<AtomicBool>) {
+    let current = state.watcher_cancel.lock().unwrap().clone();
+    if Arc::ptr_eq(&current, cancel_token) {
+        *state.watching_migrations.lock().unwrap() = false;
+    }
+}
+
 fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig> {
     let app_config_path = app_config_file_path(app)?;
     if app_config_path.exists() {
@@ -126,9 +159,7 @@ pub async fn set_project(
     db_context: String,
     startup_project: String,
 ) -> Result<ProjectInfo, String> {
-    if !Path::new(&project_path).exists() {
-        return Err(format!("Path does not exist: {}", project_path));
-    }
+    ensure_path_exists(&project_path)?;
 
     let pp = project_path.clone();
     let branch = tokio::task::spawn_blocking(move || {
@@ -168,12 +199,13 @@ pub async fn set_project(
             (id, None)
         };
         ac.active_project_id = Some(id.clone());
-        let _ = save_app_config(&app, &ac);
+        save_app_config(&app, &ac)?;
         (id, stable)
     };
 
     *state.config.lock().unwrap() = Some(config.clone());
     *state.current_branch.lock().unwrap() = branch.clone();
+    reset_watchers(&state);
 
     Ok(ProjectInfo {
         id: Some(project_id),
@@ -372,9 +404,7 @@ pub async fn save_project(
     db_context: String,
     startup_project: String,
 ) -> Result<SavedProject, String> {
-    if !Path::new(&path).exists() {
-        return Err(format!("Path does not exist: {}", path));
-    }
+    ensure_path_exists(&path)?;
 
     let id = generate_id();
     let saved = SavedProject {
@@ -405,6 +435,8 @@ pub async fn update_saved_project(
     db_context: String,
     startup_project: String,
 ) -> Result<SavedProject, String> {
+    ensure_path_exists(&path)?;
+
     let mut ac = state.app_config.lock().unwrap();
     let proj = ac
         .projects
@@ -444,6 +476,9 @@ pub async fn delete_saved_project(
     if ac.active_project_id.as_ref() == Some(&id) {
         ac.active_project_id = None;
         *state.config.lock().unwrap() = None;
+        *state.current_branch.lock().unwrap() = String::new();
+        state.migrations.lock().unwrap().clear();
+        reset_watchers(&state);
     }
 
     save_app_config(&app, &ac)?;
@@ -457,20 +492,20 @@ pub async fn switch_project(
     id: String,
 ) -> Result<ProjectInfo, String> {
     let project = {
-        let mut ac = state.app_config.lock().unwrap();
-        let proj = ac
-            .projects
+        let ac = state.app_config.lock().unwrap();
+        ac.projects
             .iter()
             .find(|p| p.id == id)
             .ok_or_else(|| format!("Project not found: {}", id))?
-            .clone();
-        ac.active_project_id = Some(id.clone());
-        save_app_config(&app, &ac)?;
-        proj
+            .clone()
     };
 
-    if !Path::new(&project.project_path).exists() {
-        return Err(format!("Path does not exist: {}", project.project_path));
+    ensure_path_exists(&project.project_path)?;
+
+    {
+        let mut ac = state.app_config.lock().unwrap();
+        ac.active_project_id = Some(id.clone());
+        save_app_config(&app, &ac)?;
     }
 
     let config = ProjectConfig {
@@ -488,15 +523,7 @@ pub async fn switch_project(
 
     *state.config.lock().unwrap() = Some(config);
     *state.current_branch.lock().unwrap() = branch.clone();
-
-    // Signal old watcher threads to stop, then reset flags for new watchers
-    {
-        let mut cancel = state.watcher_cancel.lock().unwrap();
-        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-        *cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    }
-    *state.watching.lock().unwrap() = false;
-    *state.watching_migrations.lock().unwrap() = false;
+    reset_watchers(&state);
 
     Ok(ProjectInfo {
         id: Some(project.id),
@@ -965,6 +992,7 @@ pub async fn start_branch_watcher(
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
+                clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
                 eprintln!("Failed to create watcher: {}", e);
                 return;
             }
@@ -972,6 +1000,7 @@ pub async fn start_branch_watcher(
 
         let parent = Path::new(&head_path_clone).parent().unwrap();
         if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+            clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
             eprintln!("Failed to watch .git directory: {}", e);
             return;
         }
@@ -1029,6 +1058,7 @@ pub async fn start_branch_watcher(
                                 BranchChangeEvent {
                                     old_branch: old,
                                     new_branch,
+                                    reverted_to_stable: false,
                                 },
                             );
                         }
@@ -1039,6 +1069,8 @@ pub async fn start_branch_watcher(
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
+
+        clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
     });
 
     Ok(format!("Watching for branch changes: {}", head_path))
@@ -1048,6 +1080,7 @@ pub async fn start_branch_watcher(
 struct BranchChangeEvent {
     old_branch: String,
     new_branch: String,
+    reverted_to_stable: bool,
 }
 
 #[tauri::command]
@@ -1080,12 +1113,14 @@ pub async fn start_migration_watcher(
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
+                clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
                 eprintln!("Failed to create migration watcher: {}", e);
                 return;
             }
         };
 
         if let Err(e) = watcher.watch(Path::new(&migrations_dir_str), RecursiveMode::Recursive) {
+            clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
             eprintln!("Failed to watch migrations directory: {}", e);
             return;
         }
@@ -1133,6 +1168,8 @@ pub async fn start_migration_watcher(
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
+
+        clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
     });
 
     Ok(format!(

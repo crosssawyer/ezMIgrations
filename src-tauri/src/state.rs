@@ -56,12 +56,6 @@ pub struct Migration {
     pub file_path: Option<String>,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
-pub struct BranchInfo {
-    pub name: String,
-    pub last_migration: Option<String>,
-}
-
 #[derive(Default)]
 pub struct AppState {
     pub config: Mutex<Option<ProjectConfig>>,

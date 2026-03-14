@@ -383,27 +383,6 @@ impl DotnetEf {
         Self::run_ef_cancellable(project_path, &args, startup_project, "update database")
     }
 
-    /// Update the database without rebuilding — uses the already-compiled assembly.
-    /// Useful for reverting after a branch switch when the old .cs files are gone
-    /// but bin/obj still has the compiled Down() methods.
-    pub fn update_database_no_build(
-        project_path: &str,
-        target: &str,
-        db_context: &str,
-        startup_project: &str,
-    ) -> Result<CommandResult, String> {
-        let mut args = vec!["database", "update"];
-        if !target.is_empty() {
-            args.push(target);
-        }
-        if !db_context.is_empty() {
-            args.push("--context");
-            args.push(db_context);
-        }
-        args.push("--no-build");
-        Self::run_ef_cancellable(project_path, &args, startup_project, "update database")
-    }
-
     /// Generate SQL script between two migrations.
     pub fn script_migration(
         project_path: &str,

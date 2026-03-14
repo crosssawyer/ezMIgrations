@@ -44,6 +44,7 @@ const statusBar = $("#status-bar");
 const statusBarText = $("#status-bar-text");
 const searchInput = $("#search-input");
 const hotkeysOverlay = $("#hotkeys-overlay");
+const selectAllCheckbox = $("#select-all");
 
 // ─── Init ───────────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ function bindEvents() {
   });
 
   // Select all checkbox
-  $("#select-all").addEventListener("change", (e) => {
+  selectAllCheckbox.addEventListener("change", (e) => {
     const checked = e.target.checked;
     migrations.forEach((m) => {
       if (checked) checkedMigrations.add(m.id);
@@ -281,6 +282,7 @@ async function connectProject() {
 }
 
 function showMain(project) {
+  resetMigrationUIState();
   setupPanel.classList.add("hidden");
   settingsPanel.classList.add("hidden");
   mainContent.classList.remove("hidden");
@@ -296,6 +298,7 @@ function showMain(project) {
 }
 
 function showSetup() {
+  resetMigrationUIState();
   mainContent.classList.add("hidden");
   settingsPanel.classList.add("hidden");
   setupPanel.classList.remove("hidden");
@@ -319,6 +322,7 @@ async function refreshMigrations() {
 
   try {
     migrations = await invoke("list_migrations");
+    reconcileMigrationState();
     dbConnected = true;
     renderMigrations();
   } catch (err) {
@@ -348,12 +352,14 @@ function renderMigrations() {
   if (migrations.length === 0) {
     emptyState.innerHTML = "<p>No migrations found. Create one to get started.</p>";
     emptyState.classList.remove("hidden");
+    updateSelectAllState();
     return;
   }
 
   if (filtered.length === 0) {
     emptyState.innerHTML = "<p>No migrations match your filter.</p>";
     emptyState.classList.remove("hidden");
+    updateSelectAllState();
     return;
   }
 
@@ -405,6 +411,7 @@ function renderMigrations() {
     tr.querySelector('input[type="checkbox"]').addEventListener("change", (e) => {
       if (e.target.checked) checkedMigrations.add(m.id);
       else checkedMigrations.delete(m.id);
+      updateSelectAllState();
     });
 
     // Name click -> view detail
@@ -418,6 +425,8 @@ function renderMigrations() {
 
     migrationTbody.appendChild(tr);
   });
+
+  updateSelectAllState();
 }
 
 async function viewMigration(m) {
@@ -470,6 +479,44 @@ function closeDetail() {
   detailPanel.classList.add("hidden");
   selectedMigration = null;
   renderMigrations();
+}
+
+function resetMigrationUIState() {
+  migrations = [];
+  selectedMigration = null;
+  checkedMigrations.clear();
+  detailPanel.classList.add("hidden");
+  updateSelectAllState();
+}
+
+function reconcileMigrationState() {
+  const currentIds = new Set(migrations.map((m) => m.id));
+
+  checkedMigrations.forEach((id) => {
+    if (!currentIds.has(id)) {
+      checkedMigrations.delete(id);
+    }
+  });
+
+  if (!selectedMigration) {
+    return;
+  }
+
+  const nextSelected = migrations.find((m) => m.id === selectedMigration.id) || null;
+  selectedMigration = nextSelected;
+  if (!nextSelected) {
+    detailPanel.classList.add("hidden");
+  }
+}
+
+function updateSelectAllState() {
+  if (!selectAllCheckbox) return;
+
+  const total = migrations.length;
+  const selectedCount = migrations.filter((m) => checkedMigrations.has(m.id)).length;
+
+  selectAllCheckbox.checked = total > 0 && selectedCount === total;
+  selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < total;
 }
 
 function switchTab(tabName) {
@@ -557,19 +604,16 @@ function showAddModal() {
 }
 
 function showSquashModal() {
-  const checked = Array.from(checkedMigrations);
+  const checked = migrations.filter((m) => checkedMigrations.has(m.id));
   if (checked.length < 2) {
+    reconcileMigrationState();
+    renderMigrations();
     toast("Select at least 2 migrations to squash", "error");
     return;
   }
 
-  // Find from/to based on order in migrations array
-  const indices = checked
-    .map((id) => migrations.findIndex((m) => m.id === id))
-    .sort((a, b) => a - b);
-
-  const fromMigration = migrations[indices[0]];
-  const toMigration = migrations[indices[indices.length - 1]];
+  const fromMigration = checked[0];
+  const toMigration = checked[checked.length - 1];
 
   showModal("Squash Migrations", `
     <p style="margin-bottom: 12px; color: var(--text-dim);">
@@ -972,18 +1016,15 @@ function listenForBranchChanges() {
         }
       });
     } else if (stableMigration) {
-      // Stable is set but auto-revert failed or wasn't possible.
-      // The old branch's .cs files are gone so we can't revert from here.
       showModal("Branch Changed", `
         <p style="margin-bottom: 12px;">
           Switched from <strong>${old_branch}</strong> to <strong>${new_branch}</strong>
         </p>
         <p style="margin-bottom: 8px; color: var(--yellow);">
-          Auto-revert to stable migration <strong>${stableMigration}</strong> failed.
-          The compiled assembly may be out of date.
+          Stable migration <strong>${stableMigration}</strong> is configured for this project.
         </p>
         <p style="color: var(--text-dim); font-size: 12px;">
-          Try updating to latest on <strong>${new_branch}</strong>. If that fails, you may need to manually revert.
+          Update to latest on <strong>${new_branch}</strong>? If that fails, you may need to revert manually first.
         </p>
       `, async () => {
         closeModal();
