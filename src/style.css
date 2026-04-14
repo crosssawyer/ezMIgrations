@@ -666,25 +666,127 @@ input[type="checkbox"]:checked::after {
   display: block;
 }
 
-#sql-list .sql-block {
-  margin-bottom: 12px;
-  padding: 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-#sql-list .sql-label {
+.tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
   font-size: 10px;
   font-weight: 600;
+  line-height: 1;
+}
+
+.sql-empty {
   color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  padding: 24px 0;
+  text-align: center;
+}
+
+.sql-card {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-surface);
+}
+
+.sql-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid transparent;
+  transition: background 0.12s;
+}
+
+.sql-card-header:hover {
+  background: var(--bg-hover);
+}
+
+.sql-card.expanded .sql-card-header {
+  border-bottom-color: var(--border);
+}
+
+.sql-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sql-obj-type {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-bottom: 6px;
+  letter-spacing: 0.4px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--bg-active);
+  color: var(--accent);
+}
+
+.sql-obj-name {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sql-card-toggle {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  color: var(--text-muted);
+  width: 18px;
+  text-align: center;
+}
+
+.sql-card.expanded .sql-card-toggle::after {
+  content: "\2212";
+}
+
+.sql-card:not(.expanded) .sql-card-toggle::after {
+  content: "+";
+}
+
+.sql-card-body {
+  margin: 0;
+  padding: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-dim);
+  background: var(--bg);
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.sql-card-body.collapsed {
+  display: none;
+}
+
+.sql-card.expanded .sql-card-body.collapsed {
+  display: block;
+}
+
+.sql-card:not(.expanded) .sql-card-body:not(.collapsed) {
+  display: block;
 }
 
 /* ── Modal ──────────────────────────────────────────── */

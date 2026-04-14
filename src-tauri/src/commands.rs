@@ -1,6 +1,6 @@
 use crate::dotnet::DotnetEf;
 use crate::git::GitService;
-use crate::parser::MigrationParser;
+use crate::parser::{KeepStrategy, MigrationParser, SqlStatement};
 use crate::state::{AppConfig, AppState, Migration, Preferences, ProjectConfig, SavedProject};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -608,8 +608,8 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
                 match MigrationParser::parse_file(fp) {
                     Ok(parsed) => (
                         parsed.has_custom_sql,
-                        parsed.custom_sql_up,
-                        parsed.custom_sql_down,
+                        parsed.sql_strings_up(),
+                        parsed.sql_strings_down(),
                     ),
                     Err(_) => (false, Vec::new(), Vec::new()),
                 }
@@ -753,13 +753,15 @@ pub async fn get_migration_sql(
             })?;
 
         let parsed = MigrationParser::parse_file(&file_path)?;
+        let custom_sql_up = parsed.sql_strings_up();
+        let custom_sql_down = parsed.sql_strings_down();
 
         Ok(MigrationSqlInfo {
             name: parsed.file_name,
             up_body: parsed.up_body,
             down_body: parsed.down_body,
-            custom_sql_up: parsed.custom_sql_up,
-            custom_sql_down: parsed.custom_sql_down,
+            custom_sql_up,
+            custom_sql_down,
         })
     })
     .await
@@ -791,9 +793,10 @@ pub async fn squash_migrations(
     let migrations = state.migrations.lock().unwrap().clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        // 1. Collect all custom SQL from migrations in the range
+        // 1. Collect all custom SQL from migrations in the range (with ordering metadata)
         let mut in_range = false;
-        let mut all_custom_sql: Vec<String> = Vec::new();
+        let mut all_custom_sql_up: Vec<SqlStatement> = Vec::new();
+        let mut all_custom_sql_down: Vec<SqlStatement> = Vec::new();
         let mut migrations_to_remove: Vec<String> = Vec::new();
 
         for m in &migrations {
@@ -801,13 +804,24 @@ pub async fn squash_migrations(
                 in_range = true;
             }
             if in_range {
-                all_custom_sql.extend(m.custom_sql_up.clone());
+                // Re-parse the file to get SqlStatement objects with ordering metadata
+                if let Some(ref fp) = m.file_path {
+                    if let Ok(parsed) = MigrationParser::parse_file(Path::new(fp)) {
+                        all_custom_sql_up.extend(parsed.custom_sql_up);
+                        all_custom_sql_down.extend(parsed.custom_sql_down);
+                    }
+                }
                 migrations_to_remove.push(m.name.clone());
             }
             if m.name == to_migration {
                 break;
             }
         }
+
+        let all_custom_sql_up =
+            MigrationParser::deduplicate_sql(all_custom_sql_up, KeepStrategy::Last);
+        let all_custom_sql_down =
+            MigrationParser::deduplicate_sql(all_custom_sql_down, KeepStrategy::First);
 
         if migrations_to_remove.is_empty() {
             return Err("No migrations found in the specified range".to_string());
@@ -867,12 +881,15 @@ pub async fn squash_migrations(
             ));
         }
 
-        // 5. Inject captured custom SQL into the new migration
-        if !all_custom_sql.is_empty() {
-            if let Some(new_file) =
-                MigrationParser::get_migration_file(&config.project_path, &new_name)
-            {
-                MigrationParser::inject_custom_sql(&new_file, &all_custom_sql)?;
+        // 5. Inject captured custom SQL into the new migration (Up and Down)
+        if let Some(new_file) =
+            MigrationParser::get_migration_file(&config.project_path, &new_name)
+        {
+            if !all_custom_sql_up.is_empty() {
+                MigrationParser::inject_custom_sql(&new_file, "Up", &all_custom_sql_up)?;
+            }
+            if !all_custom_sql_down.is_empty() {
+                MigrationParser::inject_custom_sql(&new_file, "Down", &all_custom_sql_down)?;
             }
         }
 
@@ -892,10 +909,11 @@ pub async fn squash_migrations(
         }
 
         Ok(format!(
-            "Squashed {} migrations into '{}'. Custom SQL preserved: {} statements.",
+            "Squashed {} migrations into '{}'. Custom SQL preserved: {} Up, {} Down.",
             migrations_to_remove.len(),
             new_name,
-            all_custom_sql.len()
+            all_custom_sql_up.len(),
+            all_custom_sql_down.len()
         ))
     })
     .await

@@ -441,36 +441,73 @@ async function viewMigration(m) {
   }
 }
 
+function extractSqlMeta(sql) {
+  const m = sql.match(
+    /(?:CREATE\s+(?:OR\s+ALTER\s+)?|ALTER\s+)(PROCEDURE|VIEW|FUNCTION|TRIGGER)\s+([\w.\[\]]+(?:\.[\w.\[\]]+)*)/i
+  );
+  if (m) {
+    const type = m[1].toUpperCase();
+    const name = m[2].replace(/\[|\]/g, "");
+    return { type, name };
+  }
+  const drop = sql.match(/DROP\s+(VIEW|PROCEDURE|FUNCTION|TRIGGER)\s+(?:IF\s+EXISTS\s+)?([\w.\[\]]+(?:\.[\w.\[\]]+)*)/i);
+  if (drop) return { type: "DROP " + drop[1].toUpperCase(), name: drop[2].replace(/\[|\]/g, "") };
+  const update = sql.match(/^\s*UPDATE\s+([\w.\[\]]+(?:\.[\w.\[\]]+)*)/i);
+  if (update) return { type: "UPDATE", name: update[1].replace(/\[|\]/g, "") };
+  return null;
+}
+
+function renderSqlList(container, statements, direction) {
+  if (statements.length === 0) {
+    container.innerHTML = `<div class="sql-empty">No custom SQL in ${direction}</div>`;
+    return;
+  }
+  statements.forEach((s, i) => {
+    const meta = extractSqlMeta(s);
+    const card = document.createElement("div");
+    card.className = "sql-card";
+    const collapsed = s.split("\n").length > 6;
+    card.innerHTML = `
+      <div class="sql-card-header">
+        <div class="sql-card-meta">
+          ${meta ? `<span class="sql-obj-type">${escapeHtml(meta.type)}</span>` : ""}
+          <span class="sql-obj-name">${meta ? escapeHtml(meta.name) : `Statement ${i + 1}`}</span>
+        </div>
+        <span class="sql-card-toggle"></span>
+      </div>
+      <pre class="sql-card-body ${collapsed ? "collapsed" : ""}">${escapeHtml(s.trim())}</pre>
+    `;
+    card.querySelector(".sql-card-header").addEventListener("click", () => {
+      card.classList.toggle("expanded");
+    });
+    if (!collapsed) card.classList.add("expanded");
+    container.appendChild(card);
+  });
+}
+
 function showDetail(sql) {
   detailPanel.classList.remove("hidden");
   $("#detail-name").textContent = sql.name;
   $("#detail-up code").textContent = sql.up_body || "(empty)";
   $("#detail-down code").textContent = sql.down_body || "(empty)";
 
-  const sqlList = $("#sql-list");
-  sqlList.innerHTML = "";
+  const sqlUpList = $("#sql-up-list");
+  const sqlDownList = $("#sql-down-list");
+  sqlUpList.innerHTML = "";
+  sqlDownList.innerHTML = "";
 
-  if (sql.custom_sql_up.length === 0 && sql.custom_sql_down.length === 0) {
-    sqlList.innerHTML = '<p style="color: var(--text-muted)">No custom SQL in this migration.</p>';
-  } else {
-    sql.custom_sql_up.forEach((s, i) => {
-      const block = document.createElement("div");
-      block.innerHTML = `
-        <div class="sql-label">Up - Statement ${i + 1}</div>
-        <div class="sql-block">${escapeHtml(s)}</div>
-      `;
-      sqlList.appendChild(block);
-    });
+  // Update tab badges
+  const upTab = $(`.detail-tabs .tab[data-tab="sql-up"]`);
+  const downTab = $(`.detail-tabs .tab[data-tab="sql-down"]`);
+  upTab.innerHTML = sql.custom_sql_up.length
+    ? `SQL Up <span class="tab-badge">${sql.custom_sql_up.length}</span>`
+    : "SQL Up";
+  downTab.innerHTML = sql.custom_sql_down.length
+    ? `SQL Down <span class="tab-badge">${sql.custom_sql_down.length}</span>`
+    : "SQL Down";
 
-    sql.custom_sql_down.forEach((s, i) => {
-      const block = document.createElement("div");
-      block.innerHTML = `
-        <div class="sql-label">Down - Statement ${i + 1}</div>
-        <div class="sql-block">${escapeHtml(s)}</div>
-      `;
-      sqlList.appendChild(block);
-    });
-  }
+  renderSqlList(sqlUpList, sql.custom_sql_up, "Up()");
+  renderSqlList(sqlDownList, sql.custom_sql_down, "Down()");
 
   switchTab("up");
 }
