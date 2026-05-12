@@ -27,6 +27,7 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+.zed
 *.swp
 *.swo
 
