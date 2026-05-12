@@ -1,97 +1,99 @@
-# ezMIgrations
+# ezMigrations
 
-A Python helper tool to make squashing Entity Framework migrations much easier by automatically extracting and consolidating custom SQL and stored procedures.
+A fast, lightweight desktop app for managing .NET Entity Framework Core migrations. Built with Tauri (Rust) and vanilla JS.
 
 ## Features
 
-✅ **Migration Parsing**
+- **Migration tracking** — See all migrations with applied/pending status at a glance
+- **Custom SQL capture** — Automatically extracts `migrationBuilder.Sql()` calls from migration files
+- **Squash migrations** — Consolidate multiple migrations into one while preserving custom SQL
+- **Git branch awareness** — Watches for branch changes and prompts to update the database accordingly
+- **Managed branch switching** — Uses git to compare target-branch migrations, rolls back to the latest common migration, checks out the branch, and updates the database
+- **Out-of-sync detection** — Detects foreign migrations left over from other branches, highlights them in the list, and offers a one-click revert
+- **Stable migration** — Pin a migration as a safe rollback point for branch switches
+- **Create / delete migrations** — One-click migration management through `dotnet ef`
+- **Update database** — Apply up to any migration or update to latest
+- **SQL script generation** — Generate SQL scripts between migration points
+- **Multi-project support** — Save and switch between multiple EF projects from the settings panel
+- **Preferences** — Configure notifications (e.g. disable branch-change prompts)
+- **Keyboard shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `?` help
 
-- Extracts Up and Down methods from EF migration files
-- Handles complex migration structures with proper regex patterns
+## Prerequisites
 
-✅ **Custom SQL Extraction**
-
-- Identifies and extracts custom SQL statements from migrations
-- Supports both simple SQL and complex multi-line statements
-- Preserves SQL formatting and string concatenation
-
-✅ **Stored Procedure Management**
-
-- Automatically detects stored procedures in migrations
-- Tracks the latest Up method and oldest Down method for each procedure
-- Consolidates multiple procedure updates into a single migration
-
-✅ **EF Command Integration**
-
-- Runs `dotnet ef database update` commands
-- Generates new squashed migration files
-- Integrates with existing EF workflow
-
-## Installation
-
-1. Clone the repository:
+- [.NET SDK](https://dotnet.microsoft.com/download) with `dotnet-ef` tool installed
+- [Node.js](https://nodejs.org/) (for frontend build)
+- [Rust](https://rustup.rs/) (for Tauri backend)
 
 ```bash
-git clone https://github.com/yourusername/ezMIgrations.git
-cd ezMIgrations
+# Install the EF Core CLI tool if you haven't
+dotnet tool install --global dotnet-ef
 ```
 
-2. Set up a virtual environment:
+## Development
 
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+# Install frontend dependencies
+npm install
+
+# Run in development mode
+npm run tauri dev
+
+# Build for production
+npm run tauri build
 ```
-
-3. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Usage
-
-1. Run the tool:
-
-```bash
-python main.py
-```
-
-2. Enter the path to your migrations folder when prompted
-
-3. The tool will:
-   - Scan all migration files
-   - Extract custom SQL and stored procedures
-   - Generate a consolidated migration file
-   - Optionally run EF commands
 
 ## Architecture
 
-The tool is built with a clean OOP structure:
-
-- **`MigrationParser`**: Extracts Up/Down methods from migration files
-- **`SqlExtractor`**: Handles custom SQL detection and stored procedure management
-- **`MigrationManager`**: Orchestrates the entire migration squashing process
-- **`StoredProcedure`**: Represents stored procedure data with update tracking
-
-## Example
-
-Given migrations with custom SQL like:
-
-```csharp
-migrationBuilder.Sql(@"
-    CREATE PROCEDURE GetProducts
-    AS
-    BEGIN
-        SELECT * FROM Products
-    END;
-");
+```
+src-tauri/           Rust backend (Tauri v2)
+  src/
+    commands.rs      Tauri command handlers
+    dotnet.rs        dotnet ef CLI wrapper
+    git.rs           Git operations + branch detection
+    parser.rs        C# migration file parser
+    process.rs       Cross-platform subprocess helper
+    state.rs         App state & config models
+src/                 Frontend (vanilla JS)
+  main.js           App logic + UI
+  style.css         Dark theme styling
+index.html           Entry point
 ```
 
-The tool will extract this SQL and include it in the final squashed migration, maintaining proper Up/Down method structure.
+## Releasing
 
-## Requirements
+The project uses a GitHub Actions workflow to build standalone executables for Linux, Windows, and macOS and publish them as a GitHub Release.
 
-- Python 3.8+
-- .NET Core SDK (for EF commands)
-- Entity Framework Core project
+### Option 1: Tag push (recommended)
+
+Create and push a version tag from your local machine:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag must start with `v` (e.g. `v0.1.0`, `v1.2.3`).
+
+### Option 2: Manual dispatch
+
+1. Go to the repository on GitHub
+2. Navigate to **Actions** > **Release**
+3. Click **Run workflow**
+4. Enter the version number (e.g. `0.2.0` — no `v` prefix needed)
+5. Click **Run workflow**
+
+This will create the tag automatically and trigger the full release.
+
+### What the pipeline does
+
+1. Builds native installers on each platform using Tauri:
+   - **Linux** — `.deb` and `.AppImage`
+   - **Windows** — `.msi` and `.exe` (NSIS)
+   - **macOS** — `.dmg`
+2. Creates a GitHub Release tagged with the version
+3. Attaches all installers to the release
+4. Auto-generates release notes from commit history
+
+### Downloading a release
+
+Go to the [Releases](../../releases) page and download the installer for your platform.

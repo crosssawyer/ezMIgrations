@@ -1,0 +1,116 @@
+import * as React from "react";
+import { useQueryClient } from "@tanstack/react-query";
+
+import { UIProvider, useUI } from "@/lib/ui-store";
+import { useProject, usePreferences, queryKeys } from "@/lib/queries";
+import { listen, invoke } from "@/lib/tauri";
+import { Header } from "@/components/Header";
+import { SetupView } from "@/components/SetupView";
+import { MainView } from "@/components/MainView";
+import { SettingsSheet } from "@/components/SettingsSheet";
+import { HotkeysDialog } from "@/components/HotkeysDialog";
+import { OperationOverlay } from "@/components/OperationOverlay";
+import { DialogRoot } from "@/components/dialogs/DialogRoot";
+
+function AppShell() {
+  const { data: project, isLoading } = useProject();
+  const { data: preferences } = usePreferences();
+  const qc = useQueryClient();
+  const ui = useUI();
+
+  React.useEffect(() => {
+    let cancelled = false;
+    let unMigrations = null;
+    let unBranch = null;
+    listen("migrations-changed", () => {
+      qc.invalidateQueries({ queryKey: queryKeys.migrations });
+    }).then((un) => {
+      if (cancelled) un();
+      else unMigrations = un;
+    });
+    listen("branch-changed", (event) => {
+      const { old_branch, new_branch, reverted_to_stable } = event.payload;
+      ui.setPreviousBranch(old_branch);
+      ui.setSyncDismissed(false);
+      qc.setQueryData(queryKeys.currentBranch, new_branch);
+      qc.invalidateQueries({ queryKey: queryKeys.migrations });
+      if (preferences?.notify_on_branch_change !== false) {
+        ui.openDialog("branchChanged", { old_branch, new_branch, reverted_to_stable });
+      }
+    }).then((un) => {
+      if (cancelled) un();
+      else unBranch = un;
+    });
+    return () => {
+      cancelled = true;
+      unMigrations?.();
+      unBranch?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, preferences?.notify_on_branch_change]);
+
+  React.useEffect(() => {
+    if (!project) return;
+    invoke("start_branch_watcher").catch(() => {});
+    invoke("start_migration_watcher").catch(() => {});
+  }, [project]);
+
+  React.useEffect(() => {
+    function onKey(e) {
+      const mod = e.ctrlKey || e.metaKey;
+      const tag = document.activeElement?.tagName;
+      const inInput = tag === "INPUT" || tag === "TEXTAREA";
+
+      if (e.key === "Escape") {
+        if (ui.hotkeysOpen) ui.setHotkeysOpen(false);
+        else if (ui.dialog) ui.closeDialog();
+        else if (ui.settingsOpen) ui.setSettingsOpen(false);
+        else if (ui.selectedMigrationId) ui.setSelectedMigrationId(null);
+        return;
+      }
+      if (!project) return;
+      if (mod && !inInput && (e.key === "n" || e.key === "N")) {
+        e.preventDefault();
+        ui.openDialog("newMigration");
+        return;
+      }
+      if (mod && !inInput && (e.key === "r" || e.key === "R")) {
+        e.preventDefault();
+        qc.invalidateQueries({ queryKey: queryKeys.migrations });
+        return;
+      }
+      if (mod && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        document.querySelector('[data-search-input]')?.focus();
+        return;
+      }
+      if (e.key === "?" && !inInput) {
+        ui.setHotkeysOpen((v) => !v);
+      }
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [ui, project, qc]);
+
+  return (
+    <div className="flex h-screen flex-col bg-background text-foreground overflow-hidden">
+      <Header project={project} />
+      <main className="flex-1 min-h-0 flex flex-col">
+        {isLoading ? null : project ? <MainView project={project} /> : <SetupView />}
+      </main>
+
+      <SettingsSheet />
+      <HotkeysDialog />
+      <OperationOverlay />
+      <DialogRoot />
+    </div>
+  );
+}
+
+export function App() {
+  return (
+    <UIProvider>
+      <AppShell />
+    </UIProvider>
+  );
+}

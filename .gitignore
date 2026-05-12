@@ -1,4 +1,39 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Rust
+src-tauri/target/
+
+# Tauri generated
+src-tauri/gen/
+
+# Lock files (regenerated on install/build)
+src-tauri/Cargo.lock
+
+# Python
 venv/
-migrations/
-.zed
+*.spec
+*.egg-info/
 __pycache__/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+.zed
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+migrations/
