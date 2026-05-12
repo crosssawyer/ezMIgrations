@@ -25,11 +25,13 @@
     "windows": [
       {
         "title": "ezMigrations",
-        "width": 960,
-        "height": 720,
+        "width": 1400,
+        "height": 900,
         "resizable": true,
-        "minWidth": 700,
-        "minHeight": 500
+        "maximizable": true,
+        "minimizable": true,
+        "minWidth": 800,
+        "minHeight": 560
       }
     ],
     "security": {
