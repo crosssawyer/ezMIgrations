@@ -8,6 +8,7 @@ A fast, lightweight desktop app for managing .NET Entity Framework Core migratio
 - **Custom SQL capture** — Automatically extracts `migrationBuilder.Sql()` calls from migration files
 - **Squash migrations** — Consolidate multiple migrations into one while preserving custom SQL
 - **Git branch awareness** — Watches for branch changes and prompts to update the database accordingly
+- **Managed branch switching** — Uses git to compare target-branch migrations, rolls back to the latest common migration, checks out the branch, and updates the database
 - **Out-of-sync detection** — Detects foreign migrations left over from other branches, highlights them in the list, and offers a one-click revert
 - **Stable migration** — Pin a migration as a safe rollback point for branch switches
 - **Create / delete migrations** — One-click migration management through `dotnet ef`

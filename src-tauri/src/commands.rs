@@ -4,9 +4,10 @@ use crate::parser::{KeepStrategy, MigrationParser, SqlStatement};
 use crate::state::{AppConfig, AppState, Migration, Preferences, ProjectConfig, SavedProject};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::{atomic::AtomicBool, Arc};
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -24,6 +25,56 @@ fn enrich_ef_error(raw: &str) -> String {
         );
     }
     raw.to_string()
+}
+
+fn migration_name_from_path(path: &Path) -> Option<String> {
+    let file_name = path.file_name()?.to_str()?;
+    if !file_name.ends_with(".cs")
+        || file_name.ends_with(".Designer.cs")
+        || file_name.contains("ModelSnapshot")
+    {
+        return None;
+    }
+
+    path.file_stem()
+        .and_then(|n| n.to_str())
+        .map(ToString::to_string)
+}
+
+fn migration_name_from_git_path(path: &str) -> Option<String> {
+    migration_name_from_path(Path::new(path))
+}
+
+fn migration_names_from_files(files: Vec<PathBuf>) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|path| migration_name_from_path(path))
+        .collect()
+}
+
+fn latest_common_migration(current: &[String], target: &[String]) -> Option<String> {
+    let target_names: HashSet<&str> = target.iter().map(String::as_str).collect();
+    current
+        .iter()
+        .rev()
+        .find(|name| target_names.contains(name.as_str()))
+        .cloned()
+}
+
+fn path_relative_to_repo(repo_root: &str, path: &Path) -> Result<String, String> {
+    let root = std::fs::canonicalize(repo_root)
+        .map_err(|e| format!("Failed to resolve git root '{}': {}", repo_root, e))?;
+    let path = std::fs::canonicalize(path)
+        .map_err(|e| format!("Failed to resolve path '{}': {}", path.display(), e))?;
+    let relative = path.strip_prefix(&root).map_err(|_| {
+        format!(
+            "Migrations directory '{}' is not inside git repository '{}'",
+            path.display(),
+            root.display()
+        )
+    })?;
+
+    Ok(relative.to_string_lossy().replace('\\', "/"))
 }
 
 // ─── Project Commands ───────────────────────────────────────────────
@@ -591,8 +642,8 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
         .map_err(|e| enrich_ef_error(&e))?;
 
         // Cache all migration files once instead of scanning the directory per migration
-        let all_files = MigrationParser::find_migration_files(&config.project_path)
-            .unwrap_or_default();
+        let all_files =
+            MigrationParser::find_migration_files(&config.project_path).unwrap_or_default();
 
         let mut migrations: Vec<Migration> = Vec::new();
 
@@ -882,8 +933,7 @@ pub async fn squash_migrations(
         }
 
         // 5. Inject captured custom SQL into the new migration (Up and Down)
-        if let Some(new_file) =
-            MigrationParser::get_migration_file(&config.project_path, &new_name)
+        if let Some(new_file) = MigrationParser::get_migration_file(&config.project_path, &new_name)
         {
             if !all_custom_sql_up.is_empty() {
                 MigrationParser::inject_custom_sql(&new_file, "Up", &all_custom_sql_up)?;
@@ -958,6 +1008,186 @@ pub async fn generate_script(
 }
 
 // ─── Git / Branch Commands ──────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct BranchSwitchResult {
+    pub old_branch: String,
+    pub new_branch: String,
+    pub common_migration: Option<String>,
+    pub rollback_target: Option<String>,
+    pub rollback_performed: bool,
+    pub target_migration_count: usize,
+}
+
+#[tauri::command]
+pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let project_path = {
+        let guard = state.config.lock().unwrap();
+        guard
+            .as_ref()
+            .ok_or("No project configured")?
+            .project_path
+            .clone()
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let current = GitService::get_current_branch(&project_path).unwrap_or_default();
+        let mut branches = GitService::list_branches(&project_path)?;
+        branches.retain(|branch| branch != &current);
+        Ok(branches)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn switch_branch_with_migrations(
+    state: State<'_, AppState>,
+    target_branch: String,
+) -> Result<BranchSwitchResult, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
+
+    let project_path_for_error = config.project_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let target_branch = target_branch.trim().to_string();
+        if target_branch.is_empty() {
+            return Err("Choose a branch to switch to".to_string());
+        }
+
+        let old_branch = GitService::get_current_branch(&config.project_path)?;
+        if old_branch == target_branch {
+            return Ok(BranchSwitchResult {
+                old_branch: old_branch.clone(),
+                new_branch: old_branch,
+                common_migration: None,
+                rollback_target: None,
+                rollback_performed: false,
+                target_migration_count: 0,
+            });
+        }
+
+        if !GitService::ref_exists(&config.project_path, &target_branch)? {
+            return Err(format!("Git branch not found: {}", target_branch));
+        }
+
+        if !GitService::is_working_tree_clean(&config.project_path)? {
+            return Err(
+                "Working tree has uncommitted changes. Commit, stash, or discard them before using automatic branch switch."
+                    .to_string(),
+            );
+        }
+
+        let repo_root = GitService::get_repo_root(&config.project_path)?;
+        let migrations_dir = MigrationParser::find_migrations_dir(&config.project_path)?;
+        let migrations_pathspec = path_relative_to_repo(&repo_root, &migrations_dir)?;
+
+        let target_files =
+            GitService::list_files_at_ref(&config.project_path, &target_branch, &migrations_pathspec)?;
+        let target_migrations: Vec<String> = target_files
+            .iter()
+            .filter_map(|path| migration_name_from_git_path(path))
+            .collect();
+
+        let current_files = MigrationParser::find_migration_files(&config.project_path)
+            .map(migration_names_from_files)
+            .unwrap_or_default();
+
+        let ef_migrations = DotnetEf::list_migrations(
+            &config.project_path,
+            &config.db_context,
+            &config.startup_project,
+        )
+        .map_err(|e| enrich_ef_error(&e))?;
+
+        let ef_migration_names: Vec<String> = ef_migrations
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        let current_migrations = if ef_migration_names.is_empty() {
+            current_files
+        } else {
+            ef_migration_names
+        };
+
+        let common_migration = latest_common_migration(&current_migrations, &target_migrations);
+        let common_index = common_migration
+            .as_ref()
+            .and_then(|name| current_migrations.iter().position(|m| m == name));
+        let latest_applied_index = ef_migrations.iter().rposition(|(_, applied)| *applied);
+
+        let rollback_target = match (latest_applied_index, common_index) {
+            (Some(applied), Some(common)) if applied > common => common_migration.clone(),
+            (Some(_), None) => Some("0".to_string()),
+            _ => None,
+        };
+
+        let mut rollback_performed = false;
+        if let Some(ref target) = rollback_target {
+            let rollback = DotnetEf::update_database(
+                &config.project_path,
+                target,
+                &config.db_context,
+                &config.startup_project,
+            )?;
+
+            if !rollback.success {
+                return Err(enrich_ef_error(&format!(
+                    "Failed to roll back before switching branches: {}",
+                    rollback.error_output()
+                )));
+            }
+
+            rollback_performed = true;
+        }
+
+        GitService::switch_branch(&config.project_path, &target_branch)?;
+        let new_branch = GitService::get_current_branch(&config.project_path)
+            .unwrap_or_else(|_| target_branch.clone());
+
+        let update = DotnetEf::update_database(
+            &config.project_path,
+            "",
+            &config.db_context,
+            &config.startup_project,
+        )?;
+
+        if !update.success {
+            return Err(enrich_ef_error(&format!(
+                "Switched to '{}', but failed to update the database: {}",
+                new_branch,
+                update.error_output()
+            )));
+        }
+
+        Ok(BranchSwitchResult {
+            old_branch,
+            new_branch,
+            common_migration,
+            rollback_target,
+            rollback_performed,
+            target_migration_count: target_migrations.len(),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match result {
+        Ok(result) => {
+            *state.current_branch.lock().unwrap() = result.new_branch.clone();
+            state.migrations.lock().unwrap().clear();
+            Ok(result)
+        }
+        Err(err) => {
+            if let Ok(branch) = GitService::get_current_branch(&project_path_for_error) {
+                *state.current_branch.lock().unwrap() = branch;
+            }
+            Err(err)
+        }
+    }
+}
 
 #[tauri::command]
 pub async fn get_current_branch(state: State<'_, AppState>) -> Result<String, String> {

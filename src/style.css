@@ -376,6 +376,22 @@ input[type="text"]::placeholder {
   color: var(--text-muted);
 }
 
+select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+
+select:focus {
+  border-color: var(--accent);
+}
+
 /* ── Panels ─────────────────────────────────────────── */
 
 .panel {
@@ -828,6 +844,11 @@ input[type="checkbox"]:checked::after {
 
 #modal-body .form-group:last-child {
   margin-bottom: 0;
+}
+
+.modal-note {
+  color: var(--text-dim);
+  font-size: 12px;
 }
 
 .modal-footer {

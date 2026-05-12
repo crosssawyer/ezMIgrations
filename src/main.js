@@ -16,6 +16,8 @@ let isRefreshing = false;
 let refreshQueued = false;
 let previousBranch = null;
 let syncDismissed = false;
+let branchSwitchInProgress = false;
+let managedBranchSwitch = null;
 let preferences = { notify_on_branch_change: true };
 
 // ─── DOM Refs ───────────────────────────────────────────────────────
@@ -110,6 +112,7 @@ function bindEvents() {
   $("#btn-add").addEventListener("click", showAddModal);
   $("#btn-squash").addEventListener("click", showSquashModal);
   $("#btn-update-latest").addEventListener("click", updateToLatest);
+  $("#btn-switch-branch").addEventListener("click", showBranchSwitchModal);
   $("#btn-change-project").addEventListener("click", showSetup);
   $("#btn-refresh").addEventListener("click", refreshMigrations);
 
@@ -604,7 +607,7 @@ async function cancelRunningOperation() {
 }
 
 function setToolbarDisabled(disabled) {
-  ["#btn-add", "#btn-squash", "#btn-update-latest", "#btn-refresh"].forEach((sel) => {
+  ["#btn-add", "#btn-squash", "#btn-update-latest", "#btn-switch-branch", "#btn-refresh"].forEach((sel) => {
     const btn = $(sel);
     if (btn) btn.disabled = disabled;
   });
@@ -703,6 +706,88 @@ async function updateToLatest() {
   } finally {
     hideOverlay();
   }
+}
+
+async function showBranchSwitchModal() {
+  showOverlay("Loading branches...");
+  let branches = [];
+  try {
+    branches = await invoke("list_git_branches");
+  } catch (err) {
+    toast("Failed to load git branches: " + err, "error");
+    return;
+  } finally {
+    hideOverlay();
+  }
+
+  if (!branches.length) {
+    toast("No other git branches found", "info");
+    return;
+  }
+
+  const options = branches
+    .map((branch) => `<option value="${escapeHtml(branch)}">${escapeHtml(branch)}</option>`)
+    .join("");
+
+  showModal("Switch Branch", `
+    <div class="form-group">
+      <label for="branch-select">Branch</label>
+      <select id="branch-select">${options}</select>
+    </div>
+    <p class="modal-note">
+      ezMigrations will compare migration files through git, roll back branch-only migrations, switch branches, and update to latest.
+    </p>
+  `, async () => {
+    const targetBranch = $("#branch-select").value;
+    if (!targetBranch) {
+      toast("Choose a branch", "error");
+      return;
+    }
+
+    closeModal();
+    branchSwitchInProgress = true;
+    showOverlay("Switching to " + targetBranch + "...", { cancelable: true });
+
+    try {
+      const result = await invoke("switch_branch_with_migrations", { targetBranch });
+      managedBranchSwitch = {
+        branch: result.new_branch,
+        expiresAt: Date.now() + 10000,
+      };
+      previousBranch = result.old_branch;
+      syncDismissed = false;
+      branchBadge.textContent = result.new_branch;
+      branchBadge.classList.remove("hidden");
+      lastDbUpdate = Date.now();
+      toast(formatBranchSwitchResult(result), "success");
+      await refreshMigrations();
+    } catch (err) {
+      toast("Failed to switch branch: " + err, "error");
+      try {
+        const branch = await invoke("get_current_branch");
+        if (branch) {
+          branchBadge.textContent = branch;
+          branchBadge.classList.remove("hidden");
+        }
+      } catch (_) {
+        // Keep the existing branch badge if git cannot report the branch.
+      }
+      await refreshMigrations();
+    } finally {
+      branchSwitchInProgress = false;
+      hideOverlay();
+    }
+  }, { confirmText: "Switch & Update" });
+
+  setTimeout(() => $("#branch-select")?.focus(), 100);
+}
+
+function formatBranchSwitchResult(result) {
+  if (result.rollback_performed) {
+    const rollbackTarget = result.rollback_target === "0" ? "base" : result.rollback_target;
+    return `Switched to ${result.new_branch}; rolled back to ${rollbackTarget} first.`;
+  }
+  return `Switched to ${result.new_branch}; database updated.`;
 }
 
 async function applyUpTo(migration) {
@@ -1020,8 +1105,20 @@ function listenForBranchChanges() {
     previousBranch = old_branch;
     syncDismissed = false;
     branchBadge.textContent = new_branch;
+    branchBadge.classList.remove("hidden");
 
-    // Always refresh migrations so status indicators update
+    const isManagedSwitch =
+      branchSwitchInProgress ||
+      (managedBranchSwitch &&
+        managedBranchSwitch.branch === new_branch &&
+        Date.now() < managedBranchSwitch.expiresAt);
+
+    if (isManagedSwitch) {
+      managedBranchSwitch = null;
+      refreshMigrations();
+      return;
+    }
+
     refreshMigrations();
 
     if (!preferences.notify_on_branch_change) {

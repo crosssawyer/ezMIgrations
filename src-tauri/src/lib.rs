@@ -24,6 +24,8 @@ pub fn run() {
             commands::squash_migrations,
             commands::generate_script,
             commands::get_current_branch,
+            commands::list_git_branches,
+            commands::switch_branch_with_migrations,
             commands::start_branch_watcher,
             commands::get_saved_projects,
             commands::save_project,
