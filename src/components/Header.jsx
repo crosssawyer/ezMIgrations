@@ -9,6 +9,19 @@ import { useMigrations, useCurrentBranch, queryKeys } from "@/lib/queries";
 import { useUI } from "@/lib/ui-store";
 import { cn } from "@/lib/utils";
 
+function TooltipIconButton({ tooltip, onClick, children }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button size="icon-sm" variant="ghost" onClick={onClick}>
+          {children}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{tooltip}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function Header({ project }) {
   const ui = useUI();
   const qc = useQueryClient();
@@ -51,40 +64,25 @@ export function Header({ project }) {
         style={{ ["WebkitAppRegion"]: "no-drag" }}
       >
         {pending > 0 && (
-          <Badge className="border-yellow-500/40 bg-yellow-500/10 text-yellow-300 text-[10px] h-5">
+          <Badge size="sm" className="h-5 border-yellow-500/40 bg-yellow-500/10 text-yellow-300">
             {pending} pending
           </Badge>
         )}
         {branch && (
-          <Badge variant="default" className="font-mono text-[10px] h-5 gap-1.5">
+          <Badge variant="default" size="sm" className="h-5 font-mono">
             <GitBranch className="h-2.5 w-2.5" />
             {branch}
           </Badge>
         )}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => ui.setHotkeysOpen(true)}>
-              <HelpCircle className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Keyboard shortcuts (?)</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => ui.setSettingsOpen(true)}>
-              <Settings className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Settings</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button size="icon" variant="ghost" className="h-7 w-7" onClick={refresh}>
-              <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Refresh (⌘R)</TooltipContent>
-        </Tooltip>
+        <TooltipIconButton tooltip="Keyboard shortcuts (?)" onClick={() => ui.setHotkeysOpen(true)}>
+          <HelpCircle className="h-3.5 w-3.5" />
+        </TooltipIconButton>
+        <TooltipIconButton tooltip="Settings" onClick={() => ui.setSettingsOpen(true)}>
+          <Settings className="h-3.5 w-3.5" />
+        </TooltipIconButton>
+        <TooltipIconButton tooltip="Refresh (⌘R)" onClick={refresh}>
+          <RefreshCw className="h-3.5 w-3.5" />
+        </TooltipIconButton>
       </div>
     </header>
   );

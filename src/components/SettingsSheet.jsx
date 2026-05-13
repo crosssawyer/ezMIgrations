@@ -21,6 +21,42 @@ import {
 } from "@/lib/mutations";
 import { cn } from "@/lib/utils";
 
+function SavedProjectRow({ project, isActive, onSwitch, onEdit, onDelete }) {
+  return (
+    <div
+      className={cn(
+        "flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2",
+        isActive && "border-primary/40 bg-primary/5"
+      )}
+    >
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium truncate">{project.name}</span>
+          {isActive && <Check className="h-3 w-3 text-primary" />}
+        </div>
+        <div className="font-mono text-[10px] text-muted-foreground truncate">{project.project_path}</div>
+      </div>
+      {!isActive && (
+        <Button size="icon-sm" variant="ghost" title="Switch to project" onClick={onSwitch}>
+          <ArrowRightLeft className="h-3 w-3" />
+        </Button>
+      )}
+      <Button size="icon-sm" variant="ghost" title="Edit" onClick={onEdit}>
+        <Pencil className="h-3 w-3" />
+      </Button>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        className="text-destructive hover:text-destructive"
+        title="Delete"
+        onClick={onDelete}
+      >
+        <Trash2 className="h-3 w-3" />
+      </Button>
+    </div>
+  );
+}
+
 export function SettingsSheet() {
   const ui = useUI();
   const { data: savedProjects = [] } = useSavedProjects();
@@ -44,7 +80,7 @@ export function SettingsSheet() {
             <section>
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Saved projects</h3>
-                <Button size="sm" className="h-7 text-[11px] gap-1.5" onClick={() => ui.openDialog("addProject")}>
+                <Button size="xs" onClick={() => ui.openDialog("addProject")}>
                   <Plus className="h-3 w-3" /> Add
                 </Button>
               </div>
@@ -52,43 +88,16 @@ export function SettingsSheet() {
                 <p className="text-xs text-muted-foreground py-3">No saved projects yet. Add one to switch quickly.</p>
               ) : (
                 <div className="flex flex-col gap-1.5">
-                  {savedProjects.map((p) => {
-                    const isActive = currentProject?.id === p.id;
-                    return (
-                      <div
-                        key={p.id}
-                        className={cn(
-                          "flex items-center gap-2 rounded-md border border-border bg-card px-3 py-2",
-                          isActive && "border-primary/40 bg-primary/5"
-                        )}
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-medium truncate">{p.name}</span>
-                            {isActive && <Check className="h-3 w-3 text-primary" />}
-                          </div>
-                          <div className="font-mono text-[10px] text-muted-foreground truncate">{p.project_path}</div>
-                        </div>
-                        {!isActive && (
-                          <Button size="icon" variant="ghost" className="h-7 w-7" title="Switch to project" onClick={() => switchProject.mutate({ id: p.id })}>
-                            <ArrowRightLeft className="h-3 w-3" />
-                          </Button>
-                        )}
-                        <Button size="icon" variant="ghost" className="h-7 w-7" title="Edit" onClick={() => ui.openDialog("editProject", { project: p })}>
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          title="Delete"
-                          onClick={() => deleteProject.mutate(p.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    );
-                  })}
+                  {savedProjects.map((p) => (
+                    <SavedProjectRow
+                      key={p.id}
+                      project={p}
+                      isActive={currentProject?.id === p.id}
+                      onSwitch={() => switchProject.mutate({ id: p.id })}
+                      onEdit={() => ui.openDialog("editProject", { project: p })}
+                      onDelete={() => deleteProject.mutate(p.id)}
+                    />
+                  ))}
                 </div>
               )}
             </section>
