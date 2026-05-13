@@ -1,19 +1,14 @@
 import * as React from "react";
-import { X, ChevronDown, ChevronRight, Loader2, Copy } from "lucide-react";
+import { X, ChevronDown, ChevronRight, Copy } from "lucide-react";
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import { useUI } from "@/lib/ui-store";
 import { useMigrationSql } from "@/lib/queries";
-import { toast } from "@/lib/toast";
-
-function useCopy() {
-  return (text) => {
-    navigator.clipboard.writeText(text).then(() => toast.success("Copied to clipboard"));
-  };
-}
+import { copyToClipboard } from "@/lib/utils";
 
 function extractSqlMeta(sql) {
   const m = sql.match(
@@ -31,7 +26,6 @@ function SqlCard({ statement, index }) {
   const long = statement.split("\n").length > 6;
   const [expanded, setExpanded] = React.useState(!long);
   const meta = extractSqlMeta(statement);
-  const copy = useCopy();
   return (
     <div className="rounded-md border border-border bg-background overflow-hidden">
       <button
@@ -56,7 +50,7 @@ function SqlCard({ statement, index }) {
             size="icon-sm"
             variant="ghost"
             className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-            onClick={(e) => { e.stopPropagation(); copy(statement.trim()); }}
+            onClick={(e) => { e.stopPropagation(); copyToClipboard(statement.trim()); }}
             title="Copy SQL"
           >
             <Copy className="h-3 w-3" />
@@ -91,7 +85,6 @@ export function DetailPanel({ migrations }) {
   const { selectedMigrationId, setSelectedMigrationId } = useUI();
   const migration = migrations.find((m) => m.id === selectedMigrationId);
   const { data: sql, isLoading } = useMigrationSql(migration?.name);
-  const copy = useCopy();
 
   if (!migration) return null;
 
@@ -105,8 +98,9 @@ export function DetailPanel({ migrations }) {
       </div>
       <div className="flex-1 overflow-hidden">
         {isLoading || !sql ? (
-          <div className="p-4 text-xs text-muted-foreground flex items-center gap-2">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading migration details…
+          <div className="flex flex-col items-center justify-center h-full gap-3 text-muted-foreground">
+            <Spinner className="size-5" />
+            <span className="text-xs">Loading migration details...</span>
           </div>
         ) : (
           <Tabs defaultValue="up" className="flex h-full flex-col">
@@ -136,7 +130,7 @@ export function DetailPanel({ migrations }) {
                       size="icon-sm"
                       variant="ghost"
                       className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copy(sql.up_body)}
+                      onClick={() => copyToClipboard(sql.up_body)}
                       title="Copy"
                     >
                       <Copy className="h-3 w-3" />
@@ -154,7 +148,7 @@ export function DetailPanel({ migrations }) {
                       size="icon-sm"
                       variant="ghost"
                       className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copy(sql.down_body)}
+                      onClick={() => copyToClipboard(sql.down_body)}
                       title="Copy"
                     >
                       <Copy className="h-3 w-3" />

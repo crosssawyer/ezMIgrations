@@ -4,6 +4,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { UIProvider, useUI } from "@/lib/ui-store";
 import { useProject, usePreferences, queryKeys } from "@/lib/queries";
 import { listen, invoke } from "@/lib/tauri";
+import { useRefreshOnVisible } from "@/lib/hooks";
+import { Spinner } from "@/components/ui/spinner";
 import { Header } from "@/components/Header";
 import { SetupView } from "@/components/SetupView";
 import { MainView } from "@/components/MainView";
@@ -62,6 +64,11 @@ function AppShell() {
     invoke("start_migration_watcher").catch(() => {});
   }, [project]);
 
+  useRefreshOnVisible(() => {
+    qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
+    qc.invalidateQueries({ queryKey: queryKeys.migrations });
+  }, { enabled: !!project });
+
   React.useEffect(() => {
     function onKey(e) {
       const mod = e.ctrlKey || e.metaKey;
@@ -103,7 +110,16 @@ function AppShell() {
     <div className="flex h-screen flex-col bg-background text-foreground overflow-hidden">
       <Header project={project} />
       <main className="flex-1 min-h-0 flex flex-col">
-        {isLoading ? null : project ? <MainView project={project} /> : <SetupView />}
+        {isLoading ? (
+          <div className="flex flex-1 items-center justify-center gap-3 text-muted-foreground">
+            <Spinner className="size-5" />
+            <span className="text-sm">Loading project...</span>
+          </div>
+        ) : project ? (
+          <MainView project={project} />
+        ) : (
+          <SetupView />
+        )}
       </main>
 
       <React.Suspense fallback={null}>

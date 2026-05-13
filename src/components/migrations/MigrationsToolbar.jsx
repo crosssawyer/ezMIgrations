@@ -3,10 +3,11 @@ import { Plus, Layers, Database, GitBranch, FolderOpen, Search } from "lucide-re
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
 import { useUI } from "@/lib/ui-store";
 import { useUpdateDatabase } from "@/lib/mutations";
 
-export function MigrationsToolbar() {
+export function MigrationsToolbar({ isFetching }) {
   const ui = useUI();
   const updateDb = useUpdateDatabase();
 
@@ -48,6 +49,8 @@ export function MigrationsToolbar() {
           data-search-input
         />
       </div>
+
+      {isFetching && <Spinner className="size-3 text-muted-foreground/50" />}
 
       <Button size="xs" variant="ghost" className="ml-auto" onClick={() => ui.openDialog("changeProject")}>
         <FolderOpen className="h-3 w-3" /> Change Project

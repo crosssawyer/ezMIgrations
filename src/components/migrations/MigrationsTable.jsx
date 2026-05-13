@@ -6,7 +6,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Eye, Play, Pin, PinOff, Trash2, FileCode2, Loader2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Eye, Play, Pin, PinOff, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
 
 import {
   Table,
@@ -20,12 +20,13 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/lib/ui-store";
 import { useApplyTo, useRemoveLastOrForce } from "./row-actions";
 import { useSetStable } from "@/lib/mutations";
 
-function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, removeMigration, setStable }) {
+function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable }) {
   return [
     {
       id: "select",
@@ -126,8 +127,8 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
             <Button size="xxs" variant="ghost" onClick={() => setSelectedMigrationId(m.id)} title="View details">
               <Eye className="h-3 w-3" />
             </Button>
-            <Button size="xxs" variant="ghost" onClick={() => applyTo(m)} title="Update DB to this migration">
-              <Play className="h-3 w-3" />
+            <Button size="xxs" variant="ghost" onClick={() => applyTo(m)} disabled={isApplying} title="Update DB to this migration">
+              {isApplying ? <Spinner className="size-3" /> : <Play className="h-3 w-3" />}
             </Button>
             <Button
               size="xxs"
@@ -168,15 +169,15 @@ function SortHeader({ column, children }) {
   );
 }
 
-export function MigrationsTable({ migrations, isLoading, project, foreignNames }) {
+export function MigrationsTable({ migrations, isLoading, isFetching, project, foreignNames }) {
   const { checked, setChecked, toggleChecked, setSelectedMigrationId, selectedMigrationId, searchQuery, setSearchQuery } = useUI();
-  const applyTo = useApplyTo();
+  const { applyTo, isApplying } = useApplyTo();
   const removeMigration = useRemoveLastOrForce(migrations);
   const setStable = useSetStable();
 
   const columns = React.useMemo(
-    () => buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, removeMigration, setStable }),
-    [checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, removeMigration, setStable]
+    () => buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable }),
+    [checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable]
   );
 
   const table = useReactTable({
@@ -198,8 +199,9 @@ export function MigrationsTable({ migrations, isLoading, project, foreignNames }
 
   if (isLoading && migrations.length === 0) {
     return (
-      <div className="flex flex-1 items-center justify-center text-muted-foreground gap-2">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading migrations…
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Spinner className="size-5" />
+        <span className="text-sm">Loading migrations...</span>
       </div>
     );
   }
@@ -223,7 +225,7 @@ export function MigrationsTable({ migrations, isLoading, project, foreignNames }
 
   return (
     <ScrollArea className="flex-1">
-      <Table style={{ tableLayout: "fixed", width: "100%" }}>
+      <Table style={{ tableLayout: "fixed", width: "100%" }} className={cn(isFetching && "opacity-60 transition-opacity")}>
         <TableHeader>
           {table.getHeaderGroups().map((hg) => (
             <TableRow key={hg.id} className="hover:bg-transparent">

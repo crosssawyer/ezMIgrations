@@ -10,7 +10,7 @@ import { detectOutOfSync } from "./migrations/detect-sync";
 
 export function MainView({ project }) {
   const { selectedMigrationId } = useUI();
-  const { data: migrations = [], isLoading } = useMigrations();
+  const { data: migrations = [], isLoading, isFetching } = useMigrations();
 
   const syncInfo = React.useMemo(() => detectOutOfSync(migrations), [migrations]);
   const foreignNames = React.useMemo(
@@ -20,12 +20,13 @@ export function MainView({ project }) {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
-      <MigrationsToolbar />
+      <MigrationsToolbar isFetching={isFetching} />
       <MigrationsBanners migrations={migrations} syncInfo={syncInfo} />
       <div className="flex flex-1 min-h-0 w-full">
         <MigrationsTable
           migrations={migrations}
           isLoading={isLoading}
+          isFetching={isFetching}
           project={project}
           foreignNames={foreignNames}
         />

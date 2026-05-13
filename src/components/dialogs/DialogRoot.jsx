@@ -26,6 +26,9 @@ const REGISTRY = {
   branchChanged: React.lazy(() =>
     import("./BranchChangedDialog").then((m) => ({ default: m.BranchChangedDialog }))
   ),
+  migrationError: React.lazy(() =>
+    import("./MigrationErrorDialog").then((m) => ({ default: m.MigrationErrorDialog }))
+  ),
 };
 
 export function DialogRoot() {

@@ -62,9 +62,13 @@ export function SwitchBranchDialog({ onClose }) {
     if (!selected) return;
     ui.setOverlay({ message: `Switching to ${selected}...`, cancelable: true });
     switchBranch.mutate({ targetBranch: selected }, {
-      onSettled: () => {
+      onSuccess: () => {
         ui.setOverlay(null);
         onClose();
+      },
+      onError: () => {
+        // Leave the dialog open; the hook may replace it with migrationError.
+        ui.setOverlay(null);
       },
     });
   };
@@ -74,7 +78,7 @@ export function SwitchBranchDialog({ onClose }) {
       <DialogContent className="max-w-md p-0 gap-0 overflow-hidden">
         <DialogHeader className="px-5 pt-5 pb-2">
           <DialogTitle>Switch branch</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="text-sm leading-relaxed text-foreground/80">
             Branch-only migrations roll back first, then the working tree switches
             and the database updates to latest.
           </DialogDescription>

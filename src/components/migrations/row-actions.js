@@ -3,11 +3,12 @@ import { useUpdateDatabase, useRemoveMigration } from "@/lib/mutations";
 import { useUI } from "@/lib/ui-store";
 
 export function useApplyTo() {
-  const { mutate } = useUpdateDatabase();
-  return React.useCallback(
+  const { mutate, isPending } = useUpdateDatabase();
+  const applyTo = React.useCallback(
     (migration) => mutate({ target: migration.name }),
     [mutate]
   );
+  return { applyTo, isApplying: isPending };
 }
 
 export function useRemoveLastOrForce(migrations) {

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "./toast";
 import { invoke } from "./tauri";
 import { queryKeys } from "./queries";
+import { useEfErrorHandler } from "./ef-error-handler";
 
 const { errToast } = toast;
 
@@ -12,6 +13,12 @@ const invalidateProjectAndMigrations = (qc) => {
   qc.invalidateQueries({ queryKey: queryKeys.project });
   qc.invalidateQueries({ queryKey: queryKeys.migrations });
   qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
+};
+
+const invalidateBranchState = (qc) => {
+  qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
+  qc.invalidateQueries({ queryKey: queryKeys.branches });
+  qc.invalidateQueries({ queryKey: queryKeys.migrations });
 };
 
 export function useSetProject() {
@@ -88,6 +95,7 @@ export function useAddMigration() {
 
 export function useSquashMigrations() {
   const qc = useQueryClient();
+  const handleEfError = useEfErrorHandler();
   return useMutation({
     mutationFn: ({ fromMigration, toMigration, newName }) =>
       invoke("squash_migrations", { fromMigration, toMigration, newName }),
@@ -95,31 +103,55 @@ export function useSquashMigrations() {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast("Failed to squash migrations"),
+    onError: (err) =>
+      handleEfError(err, {
+        title: "Squash failed",
+        context: "The squash operation could not complete. The database is at the last successful step.",
+        toastPrefix: "Failed to squash migrations",
+      }),
   });
 }
 
 export function useUpdateDatabase() {
   const qc = useQueryClient();
+  const handleEfError = useEfErrorHandler();
   return useMutation({
     mutationFn: ({ target = "" } = {}) => invoke("update_database", { target }),
     onSuccess: (msg) => {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast("Migration failed"),
+    onError: (err) =>
+      handleEfError(err, {
+        rollback: {
+          title: "Migration rollback failed",
+          context: "Couldn't roll the database back. The DB is at the last successful step.",
+          toastPrefix: "Migration failed",
+        },
+        apply: {
+          title: "Migration failed",
+          context: "An error occurred while applying a migration. The DB is at the last successful step.",
+          toastPrefix: "Migration failed",
+        },
+      }),
   });
 }
 
 export function useRemoveMigration() {
   const qc = useQueryClient();
+  const handleEfError = useEfErrorHandler();
   return useMutation({
     mutationFn: ({ force = false } = {}) => invoke("remove_migration", { force }),
     onSuccess: (msg) => {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast("Failed to remove migration"),
+    onError: (err) =>
+      handleEfError(err, {
+        title: "Failed to remove migration",
+        context: "The migration could not be removed. The database is at the last successful step.",
+        toastPrefix: "Failed to remove migration",
+      }),
   });
 }
 
@@ -139,12 +171,11 @@ export function useSetStable() {
 
 export function useSwitchBranch() {
   const qc = useQueryClient();
+  const handleEfError = useEfErrorHandler();
   return useMutation({
     mutationFn: ({ targetBranch }) => invoke("switch_branch_with_migrations", { targetBranch }),
     onSuccess: (result) => {
-      qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
-      qc.invalidateQueries({ queryKey: queryKeys.branches });
-      qc.invalidateQueries({ queryKey: queryKeys.migrations });
+      invalidateBranchState(qc);
       if (result?.rollback_performed) {
         const target = result.rollback_target === "0" ? "base" : result.rollback_target;
         toast.success(`Switched to ${result.new_branch}; rolled back to ${target} first.`);
@@ -152,7 +183,22 @@ export function useSwitchBranch() {
         toast.success(`Switched to ${result.new_branch}; database updated.`);
       }
     },
-    onError: errToast("Failed to switch branch"),
+    onError: (err) => {
+      invalidateBranchState(qc);
+      handleEfError(err, {
+        rollback: {
+          title: "Branch switch aborted — rollback failed",
+          context:
+            "Couldn't roll the database back to the common migration, so the branch switch was not performed. Your working tree is unchanged.",
+          toastPrefix: "Failed to switch branch",
+        },
+        apply: {
+          title: "Branch switch failed",
+          context: "The branch was switched, but the database update on the new branch failed.",
+          toastPrefix: "Failed to switch branch",
+        },
+      });
+    },
   });
 }
 
