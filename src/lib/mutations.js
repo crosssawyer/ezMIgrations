@@ -1,10 +1,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
+import { toast } from "./toast";
 import { invoke } from "./tauri";
 import { queryKeys } from "./queries";
 
-const errToast = (prefix) => (err) =>
-  toast.error(prefix ? `${prefix}: ${err}` : String(err));
+const { errToast } = toast;
 
 const invalidateMigrations = (qc) =>
   qc.invalidateQueries({ queryKey: queryKeys.migrations });
