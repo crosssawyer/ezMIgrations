@@ -42,7 +42,10 @@ export function useSaveProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (project) => invoke("save_project", { project }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.savedProjects }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
+      toast.success("Project saved");
+    },
     onError: errToast(),
   });
 }
@@ -51,7 +54,10 @@ export function useUpdateSavedProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (project) => invoke("update_saved_project", { project }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.savedProjects }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
+      toast.success("Project updated");
+    },
     onError: errToast(),
   });
 }
@@ -60,7 +66,10 @@ export function useDeleteSavedProject() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id) => invoke("delete_saved_project", { id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.savedProjects }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
+      toast.success("Project removed");
+    },
     onError: errToast(),
   });
 }

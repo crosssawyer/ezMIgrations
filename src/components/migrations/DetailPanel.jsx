@@ -1,5 +1,5 @@
 import * as React from "react";
-import { X, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
+import { X, ChevronDown, ChevronRight, Loader2, Copy } from "lucide-react";
 
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,13 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { useUI } from "@/lib/ui-store";
 import { useMigrationSql } from "@/lib/queries";
+import { toast } from "@/lib/toast";
+
+function useCopy() {
+  return (text) => {
+    navigator.clipboard.writeText(text).then(() => toast.success("Copied to clipboard"));
+  };
+}
 
 function extractSqlMeta(sql) {
   const m = sql.match(
@@ -24,6 +31,7 @@ function SqlCard({ statement, index }) {
   const long = statement.split("\n").length > 6;
   const [expanded, setExpanded] = React.useState(!long);
   const meta = extractSqlMeta(statement);
+  const copy = useCopy();
   return (
     <div className="rounded-md border border-border bg-background overflow-hidden">
       <button
@@ -43,9 +51,20 @@ function SqlCard({ statement, index }) {
         {expanded ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
       </button>
       {expanded && (
-        <pre className="m-0 max-h-80 overflow-auto border-t border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed">
-          <code>{statement.trim()}</code>
-        </pre>
+        <div className="relative border-t border-border">
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
+            onClick={(e) => { e.stopPropagation(); copy(statement.trim()); }}
+            title="Copy SQL"
+          >
+            <Copy className="h-3 w-3" />
+          </Button>
+          <pre className="m-0 max-h-80 overflow-auto bg-background px-3 py-2 font-mono text-xs leading-relaxed">
+            <code>{statement.trim()}</code>
+          </pre>
+        </div>
       )}
     </div>
   );
@@ -72,6 +91,7 @@ export function DetailPanel({ migrations }) {
   const { selectedMigrationId, setSelectedMigrationId } = useUI();
   const migration = migrations.find((m) => m.id === selectedMigrationId);
   const { data: sql, isLoading } = useMigrationSql(migration?.name);
+  const copy = useCopy();
 
   if (!migration) return null;
 
@@ -110,14 +130,40 @@ export function DetailPanel({ migrations }) {
             </div>
             <ScrollArea className="flex-1 px-4 pb-4">
               <TabsContent value="up">
-                <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                  <code>{sql.up_body || "(empty)"}</code>
-                </pre>
+                <div className="relative">
+                  {sql.up_body && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
+                      onClick={() => copy(sql.up_body)}
+                      title="Copy"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
+                    <code>{sql.up_body || "(empty)"}</code>
+                  </pre>
+                </div>
               </TabsContent>
               <TabsContent value="down">
-                <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                  <code>{sql.down_body || "(empty)"}</code>
-                </pre>
+                <div className="relative">
+                  {sql.down_body && (
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
+                      onClick={() => copy(sql.down_body)}
+                      title="Copy"
+                    >
+                      <Copy className="h-3 w-3" />
+                    </Button>
+                  )}
+                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
+                    <code>{sql.down_body || "(empty)"}</code>
+                  </pre>
+                </div>
               </TabsContent>
               <TabsContent value="sql-up">
                 <SqlList statements={sql.custom_sql_up} direction="Up()" />
