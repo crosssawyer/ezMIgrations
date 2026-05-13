@@ -17,4 +17,14 @@ export default defineConfig({
       ignored: ["**/src-tauri/**"],
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes("/node_modules/@tanstack/")) return "tanstack";
+          if (id.includes("/node_modules/@radix-ui/")) return "radix";
+        },
+      },
+    },
+  },
 });

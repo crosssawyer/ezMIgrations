@@ -7,10 +7,17 @@ import { listen, invoke } from "@/lib/tauri";
 import { Header } from "@/components/Header";
 import { SetupView } from "@/components/SetupView";
 import { MainView } from "@/components/MainView";
-import { SettingsSheet } from "@/components/SettingsSheet";
-import { HotkeysDialog } from "@/components/HotkeysDialog";
 import { OperationOverlay } from "@/components/OperationOverlay";
-import { DialogRoot } from "@/components/dialogs/DialogRoot";
+
+const SettingsSheet = React.lazy(() =>
+  import("@/components/SettingsSheet").then((m) => ({ default: m.SettingsSheet }))
+);
+const HotkeysDialog = React.lazy(() =>
+  import("@/components/HotkeysDialog").then((m) => ({ default: m.HotkeysDialog }))
+);
+const DialogRoot = React.lazy(() =>
+  import("@/components/dialogs/DialogRoot").then((m) => ({ default: m.DialogRoot }))
+);
 
 function AppShell() {
   const { data: project, isLoading } = useProject();
@@ -99,10 +106,12 @@ function AppShell() {
         {isLoading ? null : project ? <MainView project={project} /> : <SetupView />}
       </main>
 
-      <SettingsSheet />
-      <HotkeysDialog />
+      <React.Suspense fallback={null}>
+        <SettingsSheet />
+        <HotkeysDialog />
+        <DialogRoot />
+      </React.Suspense>
       <OperationOverlay />
-      <DialogRoot />
     </div>
   );
 }
