@@ -22,7 +22,7 @@ export function useSetProject() {
       invalidateProjectAndMigrations(qc);
       toast.success("Project connected");
     },
-    onError: errToast(),
+    onError: errToast("Failed to connect project"),
   });
 }
 
@@ -34,7 +34,7 @@ export function useSwitchProject() {
       invalidateProjectAndMigrations(qc);
       toast.success(`Switched to ${project?.name || "project"}`);
     },
-    onError: errToast(),
+    onError: errToast("Failed to switch project"),
   });
 }
 
@@ -46,7 +46,7 @@ export function useSaveProject() {
       qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
       toast.success("Project saved");
     },
-    onError: errToast(),
+    onError: errToast("Failed to save project"),
   });
 }
 
@@ -58,7 +58,7 @@ export function useUpdateSavedProject() {
       qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
       toast.success("Project updated");
     },
-    onError: errToast(),
+    onError: errToast("Failed to update project"),
   });
 }
 
@@ -70,7 +70,7 @@ export function useDeleteSavedProject() {
       qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
       toast.success("Project removed");
     },
-    onError: errToast(),
+    onError: errToast("Failed to remove project"),
   });
 }
 
@@ -82,7 +82,7 @@ export function useAddMigration() {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast(),
+    onError: errToast("Failed to create migration"),
   });
 }
 
@@ -95,7 +95,7 @@ export function useSquashMigrations() {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast(),
+    onError: errToast("Failed to squash migrations"),
   });
 }
 
@@ -107,7 +107,7 @@ export function useUpdateDatabase() {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast(),
+    onError: errToast("Migration failed"),
   });
 }
 
@@ -119,7 +119,7 @@ export function useRemoveMigration() {
       toast.success(msg);
       invalidateMigrations(qc);
     },
-    onError: errToast(),
+    onError: errToast("Failed to remove migration"),
   });
 }
 
