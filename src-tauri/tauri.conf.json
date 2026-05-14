@@ -25,8 +25,8 @@
     "windows": [
       {
         "title": "ezMigrations",
-        "width": 1400,
-        "height": 900,
+        "width": 800,
+        "height": 560,
         "resizable": true,
         "maximizable": true,
         "minimizable": true,

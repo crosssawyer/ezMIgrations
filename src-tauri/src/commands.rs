@@ -1019,8 +1019,15 @@ pub struct BranchSwitchResult {
     pub target_migration_count: usize,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BranchInfo {
+    pub name: String,
+    pub is_remote: bool,
+}
+
 #[tauri::command]
-pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<BranchInfo>, String> {
     let project_path = {
         let guard = state.config.lock().unwrap();
         guard
@@ -1032,9 +1039,12 @@ pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<String>
 
     tokio::task::spawn_blocking(move || {
         let current = GitService::get_current_branch(&project_path).unwrap_or_default();
-        let mut branches = GitService::list_branches(&project_path)?;
-        branches.retain(|branch| branch != &current);
-        Ok(branches)
+        let branches = GitService::list_branches(&project_path)?;
+        Ok(branches
+            .into_iter()
+            .filter(|(name, _)| name != &current)
+            .map(|(name, is_remote)| BranchInfo { name, is_remote })
+            .collect())
     })
     .await
     .map_err(|e| e.to_string())?

@@ -46,27 +46,41 @@ impl GitService {
         Ok(output.trim().is_empty())
     }
 
-    pub fn list_branches(repo_path: &str) -> Result<Vec<String>, String> {
+    pub fn list_branches(repo_path: &str) -> Result<Vec<(String, bool)>, String> {
         let output = Self::run_git(
             repo_path,
             &[
                 "for-each-ref",
                 "refs/heads",
                 "refs/remotes",
-                "--format=%(refname:short)",
+                "--format=%(refname)%09%(refname:short)",
             ],
         )?;
 
-        let mut branches = BTreeSet::new();
+        let mut locals = BTreeSet::new();
+        let mut remotes = BTreeSet::new();
         for line in output.lines() {
-            let branch = line.trim();
-            if branch.is_empty() || branch == "HEAD" || branch.ends_with("/HEAD") {
+            let mut parts = line.splitn(2, '\t');
+            let full = parts.next().unwrap_or("").trim();
+            let short = parts.next().unwrap_or("").trim();
+            if short.is_empty() || short == "HEAD" || short.ends_with("/HEAD") {
                 continue;
             }
-            branches.insert(branch.to_string());
+            if full.starts_with("refs/heads/") {
+                locals.insert(short.to_string());
+            } else if full.starts_with("refs/remotes/") {
+                remotes.insert(short.to_string());
+            }
         }
 
-        Ok(branches.into_iter().collect())
+        let mut result: Vec<(String, bool)> = Vec::with_capacity(locals.len() + remotes.len());
+        result.extend(locals.into_iter().map(|n| (n, false)));
+        result.extend(
+            remotes
+                .into_iter()
+                .map(|n| (n, true)),
+        );
+        Ok(result)
     }
 
     pub fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool, String> {

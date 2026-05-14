@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowRight, GitBranch, Check, Info } from "lucide-react";
+import { ArrowRight, GitBranch, Check, Cloud } from "lucide-react";
 
 import {
   Dialog,
@@ -46,16 +46,42 @@ function BranchChip({ label, tone = "muted" }) {
   );
 }
 
+function BranchCommandItem({ name, isRemote, isSelected, onSelect }) {
+  const Icon = isRemote ? Cloud : GitBranch;
+  return (
+    <CommandItem value={name} onSelect={onSelect} className="font-mono text-xs">
+      <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+      <span className="flex-1 truncate">{name}</span>
+      {isRemote && (
+        <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70 shrink-0">
+          remote
+        </span>
+      )}
+      <Check
+        className={cn(
+          "h-3.5 w-3.5 text-primary transition-opacity",
+          isSelected ? "opacity-100" : "opacity-0"
+        )}
+      />
+    </CommandItem>
+  );
+}
+
 export function SwitchBranchDialog({ onClose }) {
   const ui = useUI();
-  const { data: branches = [], isLoading } = useBranches(true);
-  const { data: currentBranch = "" } = useCurrentBranch(true);
+  const { data: branches = [], isLoading } = useBranches();
+  const { data: currentBranch = "" } = useCurrentBranch();
   const switchBranch = useSwitchBranch();
   const [selected, setSelected] = React.useState("");
 
-  React.useEffect(() => {
-    if (!selected && branches.length > 0) setSelected(branches[0]);
-  }, [branches, selected]);
+  const locals = React.useMemo(
+    () => branches.filter((b) => !b.isRemote),
+    [branches]
+  );
+  const remotes = React.useMemo(
+    () => branches.filter((b) => b.isRemote),
+    [branches]
+  );
 
   const onSubmit = (e) => {
     e?.preventDefault();
@@ -92,24 +118,36 @@ export function SwitchBranchDialog({ onClose }) {
           </div>
 
           <div className="border-y border-border bg-popover">
-            <Command className="rounded-none border-0 bg-transparent" value={selected} onValueChange={setSelected}>
+            <Command className="rounded-none border-0 bg-transparent">
               <CommandInput placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
               <CommandList className="max-h-[260px]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
-                <CommandGroup>
-                  {branches.map((b) => (
-                    <CommandItem
-                      key={b}
-                      value={b}
-                      onSelect={(v) => setSelected(v)}
-                      className="font-mono text-xs"
-                    >
-                      <GitBranch className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="flex-1 truncate">{b}</span>
-                      <Check className={cn("h-3.5 w-3.5 text-primary transition-opacity", selected === b ? "opacity-100" : "opacity-0")} />
-                    </CommandItem>
-                  ))}
-                </CommandGroup>
+                {locals.length > 0 && (
+                  <CommandGroup heading="Local">
+                    {locals.map((b) => (
+                      <BranchCommandItem
+                        key={`local:${b.name}`}
+                        name={b.name}
+                        isRemote={false}
+                        isSelected={selected === b.name}
+                        onSelect={setSelected}
+                      />
+                    ))}
+                  </CommandGroup>
+                )}
+                {remotes.length > 0 && (
+                  <CommandGroup heading="Remote">
+                    {remotes.map((b) => (
+                      <BranchCommandItem
+                        key={`remote:${b.name}`}
+                        name={b.name}
+                        isRemote
+                        isSelected={selected === b.name}
+                        onSelect={setSelected}
+                      />
+                    ))}
+                  </CommandGroup>
+                )}
               </CommandList>
             </Command>
           </div>
