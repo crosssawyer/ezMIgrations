@@ -26,7 +26,7 @@ const DialogContent = React.forwardRef(({ className, children, ...props }, ref) 
     <DialogPrimitive.Content
       ref={ref}
       className={cn(
-        "fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border border-border bg-card p-0 shadow-2xl rounded-lg",
+        "fixed left-1/2 top-1/2 z-50 grid w-[calc(100vw-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 border border-border bg-card p-0 shadow-2xl rounded-lg",
         className
       )}
       {...props}
@@ -46,7 +46,7 @@ const DialogHeader = ({ className, ...props }) => (
 );
 
 const DialogFooter = ({ className, ...props }) => (
-  <div className={cn("flex justify-end gap-2 px-5 pb-5 pt-2", className)} {...props} />
+  <div className={cn("flex flex-wrap justify-end gap-2 px-5 pb-5 pt-2", className)} {...props} />
 );
 
 const DialogTitle = React.forwardRef(({ className, ...props }, ref) => (
