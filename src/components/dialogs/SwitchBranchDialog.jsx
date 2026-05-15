@@ -120,7 +120,7 @@ export function SwitchBranchDialog({ onClose }) {
           <div className="border-y border-border bg-popover">
             <Command className="rounded-none border-0 bg-transparent">
               <CommandInput placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
-              <CommandList className="max-h-[260px]">
+              <CommandList className="max-h-[min(260px,40vh)]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
                 {locals.length > 0 && (
                   <CommandGroup heading="Local">
