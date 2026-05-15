@@ -11,9 +11,6 @@ src-tauri/target/
 # Tauri generated
 src-tauri/gen/
 
-# Lock files (regenerated on install/build)
-src-tauri/Cargo.lock
-
 # Python
 venv/
 *.spec
