@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "ez-migrations"
-version = "1.0.0-nightly"
+version = "1.0.0-1"
 dependencies = [
  "notify",
  "regex",
