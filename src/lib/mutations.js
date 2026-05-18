@@ -3,6 +3,7 @@ import { toast } from "./toast";
 import { invoke } from "./tauri";
 import { queryKeys } from "./queries";
 import { useEfErrorHandler } from "./ef-error-handler";
+import { useUI } from "./ui-store";
 
 const { errToast } = toast;
 
@@ -20,6 +21,52 @@ const invalidateBranchState = (qc) => {
   qc.invalidateQueries({ queryKey: queryKeys.branches });
   qc.invalidateQueries({ queryKey: queryKeys.migrations });
 };
+
+/**
+ * useMutation wrapper that shows OperationOverlay for the duration of the call.
+ * The global `operation-phase` listener (App.jsx) replaces the message once
+ * backend events arrive.
+ *
+ *   operation       -> matches the backend operation id; rendered as a title chip
+ *                      and used by the cancellation-as-neutral check below.
+ *   overlayMessage  -> initial text shown the instant the user clicks, before
+ *                      the first backend phase event arrives.
+ */
+function useOperationMutation({
+  operation,
+  overlayMessage,
+  onSuccess,
+  onError,
+  ...rest
+}) {
+  const { setOverlay } = useUI();
+  return useMutation({
+    ...rest,
+    mutationFn: async (vars) => {
+      setOverlay({
+        operation,
+        message: overlayMessage(vars),
+        cancelable: true,
+      });
+      return rest.mutationFn(vars);
+    },
+    onSuccess: (data, vars, ctx) => {
+      setOverlay(null);
+      onSuccess?.(data, vars, ctx);
+    },
+    onError: (err, vars, ctx) => {
+      setOverlay(null);
+      // Cancellation is a user action, not a failure — surface neutrally and
+      // skip the EF/error toast pipeline.
+      const message = typeof err === "string" ? err : err?.message || "";
+      if (message.includes("Canceled by user")) {
+        toast("Operation canceled.");
+        return;
+      }
+      onError?.(err, vars, ctx);
+    },
+  });
+}
 
 export function useSetProject() {
   const qc = useQueryClient();
@@ -83,7 +130,9 @@ export function useDeleteSavedProject() {
 
 export function useAddMigration() {
   const qc = useQueryClient();
-  return useMutation({
+  return useOperationMutation({
+    operation: "add_migration",
+    overlayMessage: ({ name }) => `Creating migration ${name}…`,
     mutationFn: ({ name }) => invoke("add_migration", { name }),
     onSuccess: (msg) => {
       toast.success(msg);
@@ -96,7 +145,10 @@ export function useAddMigration() {
 export function useSquashMigrations() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();
-  return useMutation({
+  return useOperationMutation({
+    operation: "squash",
+    overlayMessage: ({ fromMigration, toMigration }) =>
+      `Preparing to squash ${fromMigration} → ${toMigration}…`,
     mutationFn: ({ fromMigration, toMigration, newName }) =>
       invoke("squash_migrations", { fromMigration, toMigration, newName }),
     onSuccess: (msg) => {
@@ -115,7 +167,12 @@ export function useSquashMigrations() {
 export function useUpdateDatabase() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();
-  return useMutation({
+  return useOperationMutation({
+    operation: "update_database",
+    overlayMessage: ({ target = "" } = {}) => {
+      const label = target === "" ? "latest" : target === "0" ? "base" : target;
+      return `Starting database update to ${label}…`;
+    },
     mutationFn: ({ target = "" } = {}) => invoke("update_database", { target }),
     onSuccess: (msg) => {
       toast.success(msg);
@@ -140,7 +197,10 @@ export function useUpdateDatabase() {
 export function useRemoveMigration() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();
-  return useMutation({
+  return useOperationMutation({
+    operation: "remove_migration",
+    overlayMessage: ({ force = false } = {}) =>
+      force ? "Removing migration (force)…" : "Removing last migration…",
     mutationFn: ({ force = false } = {}) => invoke("remove_migration", { force }),
     onSuccess: (msg) => {
       toast.success(msg);
@@ -172,7 +232,9 @@ export function useSetStable() {
 export function useSwitchBranch() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();
-  return useMutation({
+  return useOperationMutation({
+    operation: "switch_branch",
+    overlayMessage: ({ targetBranch }) => `Preparing to switch to ${targetBranch}…`,
     mutationFn: ({ targetBranch }) => invoke("switch_branch_with_migrations", { targetBranch }),
     onSuccess: (result) => {
       invalidateBranchState(qc);

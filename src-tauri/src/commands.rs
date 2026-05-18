@@ -61,6 +61,79 @@ fn latest_common_migration(current: &[String], target: &[String]) -> Option<Stri
         .cloned()
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OperationPhaseEvent {
+    operation: &'static str,
+    phase: &'static str,
+    message: String,
+}
+
+/// Sender half of a phased operation. Cheap to clone; safe to move into
+/// `spawn_blocking` closures. Emits `operation-phase` events and exposes a
+/// cancellation check that the operation polls between steps.
+#[derive(Clone)]
+struct PhaseEmitter {
+    app: AppHandle,
+    operation: &'static str,
+    cancel: Arc<AtomicBool>,
+}
+
+impl PhaseEmitter {
+    fn emit(&self, phase: &'static str, message: impl Into<String>) {
+        let _ = self.app.emit(
+            "operation-phase",
+            OperationPhaseEvent {
+                operation: self.operation,
+                phase,
+                message: message.into(),
+            },
+        );
+    }
+
+    fn check_canceled(&self) -> Result<(), String> {
+        if self.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+            Err("Canceled by user.".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// RAII guard for a multi-step backend operation. Holds a `PhaseEmitter` for
+/// emitting progress and clears the shared cancel flag on drop so the next
+/// operation starts clean.
+struct PhasedOp {
+    emitter: PhaseEmitter,
+}
+
+impl PhasedOp {
+    fn new(app: &AppHandle, state: &AppState, operation: &'static str) -> Self {
+        state
+            .op_cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            emitter: PhaseEmitter {
+                app: app.clone(),
+                operation,
+                cancel: state.op_cancel.clone(),
+            },
+        }
+    }
+
+    fn emitter(&self) -> PhaseEmitter {
+        self.emitter.clone()
+    }
+}
+
+impl Drop for PhasedOp {
+    fn drop(&mut self) {
+        self.emitter
+            .cancel
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn path_relative_to_repo(repo_root: &str, path: &Path) -> Result<String, String> {
     let root = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("Failed to resolve git root '{}': {}", repo_root, e))?;
@@ -689,16 +762,25 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
 }
 
 #[tauri::command]
-pub async fn add_migration(state: State<'_, AppState>, name: String) -> Result<String, String> {
+pub async fn add_migration(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    name: String,
+) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
 
+    let op = PhasedOp::new(&app, &state, "add_migration");
+    op.emitter()
+        .emit("creating", format!("Creating migration {name}…"));
+
+    let name_clone = name.clone();
     let result = tokio::task::spawn_blocking(move || {
         DotnetEf::add_migration(
             &config.project_path,
-            &name,
+            &name_clone,
             &config.db_context,
             &config.startup_project,
         )
@@ -717,11 +799,25 @@ pub async fn add_migration(state: State<'_, AppState>, name: String) -> Result<S
 }
 
 #[tauri::command]
-pub async fn remove_migration(state: State<'_, AppState>, force: bool) -> Result<String, String> {
+pub async fn remove_migration(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    force: bool,
+) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    let op = PhasedOp::new(&app, &state, "remove_migration");
+    op.emitter().emit(
+        "removing",
+        if force {
+            "Removing migration (force)…".to_string()
+        } else {
+            "Removing last migration…".to_string()
+        },
+    );
 
     let result = tokio::task::spawn_blocking(move || {
         DotnetEf::remove_migration(
@@ -745,11 +841,27 @@ pub async fn remove_migration(state: State<'_, AppState>, force: bool) -> Result
 }
 
 #[tauri::command]
-pub async fn update_database(state: State<'_, AppState>, target: String) -> Result<String, String> {
+pub async fn update_database(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    target: String,
+) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    let label = if target.is_empty() {
+        "latest".to_string()
+    } else if target == "0" {
+        "base".to_string()
+    } else {
+        target.clone()
+    };
+
+    let op = PhasedOp::new(&app, &state, "update_database");
+    let emitter = op.emitter();
+    emitter.emit("applying", format!("Updating database to {label}…"));
 
     let target_clone = target.clone();
     let result = tokio::task::spawn_blocking(move || {
@@ -778,10 +890,20 @@ pub async fn update_database(state: State<'_, AppState>, target: String) -> Resu
 }
 
 #[tauri::command]
-pub async fn cancel_running_operation() -> Result<String, String> {
-    tokio::task::spawn_blocking(|| DotnetEf::cancel_running_operation())
+pub async fn cancel_running_operation(state: State<'_, AppState>) -> Result<String, String> {
+    // Signal multi-step operations (e.g. branch switch) to bail at the next phase.
+    state
+        .op_cancel
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let killed = tokio::task::spawn_blocking(DotnetEf::cancel_running_operation)
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())??;
+
+    Ok(match killed {
+        Some(op) => format!("Cancel requested for '{}'", op),
+        None => "Cancel requested.".to_string(),
+    })
 }
 
 #[tauri::command]
@@ -832,6 +954,7 @@ pub struct MigrationSqlInfo {
 
 #[tauri::command]
 pub async fn squash_migrations(
+    app: AppHandle,
     state: State<'_, AppState>,
     from_migration: String,
     to_migration: String,
@@ -843,7 +966,21 @@ pub async fn squash_migrations(
     };
     let migrations = state.migrations.lock().unwrap().clone();
 
+    let op = PhasedOp::new(&app, &state, "squash");
+    let emitter = op.emitter();
+
+    // Numbered step prefix. Bump TOTAL_STEPS if you add/remove a numbered step
+    // (currently: 1 revert, 2 remove, 3 create, 4 apply — scan and inject are
+    // shown without numbers because they're effectively instantaneous).
+    const TOTAL_STEPS: usize = 4;
+    let step_prefix = |n: usize| format!("Step {n}/{TOTAL_STEPS}");
+
     let result = tokio::task::spawn_blocking(move || {
+        emitter.emit(
+            "scanning",
+            format!("Scanning migrations from {from_migration} to {to_migration}…"),
+        );
+
         // 1. Collect all custom SQL from migrations in the range (with ordering metadata)
         let mut in_range = false;
         let mut all_custom_sql_up: Vec<SqlStatement> = Vec::new();
@@ -878,6 +1015,8 @@ pub async fn squash_migrations(
             return Err("No migrations found in the specified range".to_string());
         }
 
+        let total = migrations_to_remove.len();
+
         // 2. Update database back to the migration before the range
         let before_migration = migrations
             .iter()
@@ -886,6 +1025,16 @@ pub async fn squash_migrations(
             .map(|m| m.name.clone())
             .unwrap_or_else(|| "0".to_string());
 
+        emitter.check_canceled()?;
+        let revert_label = if before_migration == "0" {
+            "base".to_string()
+        } else {
+            before_migration.clone()
+        };
+        emitter.emit(
+            "reverting",
+            format!("{} — Reverting database to {revert_label}…", step_prefix(1)),
+        );
         let update_result = DotnetEf::update_database(
             &config.project_path,
             &before_migration,
@@ -901,7 +1050,18 @@ pub async fn squash_migrations(
         }
 
         // 3. Remove migrations in reverse order
-        for _ in migrations_to_remove.iter().rev() {
+        for (idx, name) in migrations_to_remove.iter().rev().enumerate() {
+            emitter.check_canceled()?;
+            emitter.emit(
+                "removing",
+                format!(
+                    "{} — Removing migration {}/{}: {}…",
+                    step_prefix(2),
+                    idx + 1,
+                    total,
+                    name
+                ),
+            );
             let result = DotnetEf::remove_migration(
                 &config.project_path,
                 &config.db_context,
@@ -918,6 +1078,11 @@ pub async fn squash_migrations(
         }
 
         // 4. Create new squashed migration
+        emitter.check_canceled()?;
+        emitter.emit(
+            "creating",
+            format!("{} — Creating squashed migration {new_name}…", step_prefix(3)),
+        );
         let add_result = DotnetEf::add_migration(
             &config.project_path,
             &new_name,
@@ -933,6 +1098,16 @@ pub async fn squash_migrations(
         }
 
         // 5. Inject captured custom SQL into the new migration (Up and Down)
+        if !all_custom_sql_up.is_empty() || !all_custom_sql_down.is_empty() {
+            emitter.emit(
+                "injecting",
+                format!(
+                    "Preserving custom SQL ({} Up, {} Down)…",
+                    all_custom_sql_up.len(),
+                    all_custom_sql_down.len()
+                ),
+            );
+        }
         if let Some(new_file) = MigrationParser::get_migration_file(&config.project_path, &new_name)
         {
             if !all_custom_sql_up.is_empty() {
@@ -944,6 +1119,11 @@ pub async fn squash_migrations(
         }
 
         // 6. Apply the new squashed migration
+        emitter.check_canceled()?;
+        emitter.emit(
+            "applying",
+            format!("{} — Applying squashed migration {new_name}…", step_prefix(4)),
+        );
         let final_update = DotnetEf::update_database(
             &config.project_path,
             "",
@@ -960,7 +1140,7 @@ pub async fn squash_migrations(
 
         Ok(format!(
             "Squashed {} migrations into '{}'. Custom SQL preserved: {} Up, {} Down.",
-            migrations_to_remove.len(),
+            total,
             new_name,
             all_custom_sql_up.len(),
             all_custom_sql_down.len()
@@ -969,6 +1149,7 @@ pub async fn squash_migrations(
     .await
     .map_err(|e| e.to_string())??;
 
+    drop(op);
     Ok(result)
 }
 
@@ -1050,8 +1231,10 @@ pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<BranchI
     .map_err(|e| e.to_string())?
 }
 
+
 #[tauri::command]
 pub async fn switch_branch_with_migrations(
+    app: AppHandle,
     state: State<'_, AppState>,
     target_branch: String,
 ) -> Result<BranchSwitchResult, String> {
@@ -1061,11 +1244,16 @@ pub async fn switch_branch_with_migrations(
     };
 
     let project_path_for_error = config.project_path.clone();
+    let op = PhasedOp::new(&app, &state, "switch_branch");
+    let emitter = op.emitter();
+
     let result = tokio::task::spawn_blocking(move || {
         let target_branch = target_branch.trim().to_string();
         if target_branch.is_empty() {
             return Err("Choose a branch to switch to".to_string());
         }
+
+        emitter.emit("preparing", format!("Preparing to switch to {target_branch}…"));
 
         let old_branch = GitService::get_current_branch(&config.project_path)?;
         if old_branch == target_branch {
@@ -1089,13 +1277,15 @@ pub async fn switch_branch_with_migrations(
                     .to_string(),
             );
         }
+        emitter.check_canceled()?;
 
         let repo_root = GitService::get_repo_root(&config.project_path)?;
         let migrations_dir = MigrationParser::find_migrations_dir(&config.project_path)?;
         let migrations_pathspec = path_relative_to_repo(&repo_root, &migrations_dir)?;
 
+        emitter.emit("reading-target", format!("Reading migrations on {target_branch}…"));
         let target_files =
-            GitService::list_files_at_ref(&config.project_path, &target_branch, &migrations_pathspec)?;
+            GitService::list_files_at_ref(&repo_root, &target_branch, &migrations_pathspec)?;
         let target_migrations: Vec<String> = target_files
             .iter()
             .filter_map(|path| migration_name_from_git_path(path))
@@ -1105,6 +1295,11 @@ pub async fn switch_branch_with_migrations(
             .map(migration_names_from_files)
             .unwrap_or_default();
 
+        emitter.check_canceled()?;
+        emitter.emit(
+            "listing-applied",
+            "Listing applied migrations in the database…",
+        );
         let ef_migrations = DotnetEf::list_migrations(
             &config.project_path,
             &config.db_context,
@@ -1128,14 +1323,45 @@ pub async fn switch_branch_with_migrations(
             .and_then(|name| current_migrations.iter().position(|m| m == name));
         let latest_applied_index = ef_migrations.iter().rposition(|(_, applied)| *applied);
 
+        if common_migration.is_none() && latest_applied_index.is_some() {
+            let preview = |list: &[String]| -> String {
+                if list.is_empty() {
+                    "(empty)".to_string()
+                } else {
+                    let shown: Vec<String> = list.iter().take(5).cloned().collect();
+                    let suffix = if list.len() > 5 {
+                        format!(", … (+{} more)", list.len() - 5)
+                    } else {
+                        String::new()
+                    };
+                    format!("[{}{}]", shown.join(", "), suffix)
+                }
+            };
+            return Err(format!(
+                "No common migration found between '{}' and '{}'. Refusing to revert all applied migrations automatically — this is almost always caused by mismatched migration filenames or a different migrations folder path on the target branch.\n\nCurrent branch migrations ({}): {}\nTarget branch migrations ({}): {}\nMigrations pathspec: {}",
+                old_branch,
+                target_branch,
+                current_migrations.len(),
+                preview(&current_migrations),
+                target_migrations.len(),
+                preview(&target_migrations),
+                migrations_pathspec,
+            ));
+        }
+
         let rollback_target = match (latest_applied_index, common_index) {
             (Some(applied), Some(common)) if applied > common => common_migration.clone(),
-            (Some(_), None) => Some("0".to_string()),
             _ => None,
         };
 
         let mut rollback_performed = false;
         if let Some(ref target) = rollback_target {
+            emitter.check_canceled()?;
+            let label = if target == "0" { "base" } else { target.as_str() };
+            emitter.emit(
+                "rolling-back",
+                format!("Rolling database back to {label}…"),
+            );
             let rollback = DotnetEf::update_database(
                 &config.project_path,
                 target,
@@ -1153,10 +1379,29 @@ pub async fn switch_branch_with_migrations(
             rollback_performed = true;
         }
 
+        emitter.check_canceled()?;
+        emitter.emit("switching-git", format!("Switching git to {target_branch}…"));
         GitService::switch_branch(&config.project_path, &target_branch)?;
         let new_branch = GitService::get_current_branch(&config.project_path)
             .unwrap_or_else(|_| target_branch.clone());
 
+        emitter.check_canceled()?;
+        let pending = match (common_index, target_migrations.len()) {
+            (Some(common), total) if total > common + 1 => total - common - 1,
+            (None, total) => total,
+            _ => 0,
+        };
+        let apply_msg = if pending > 0 {
+            format!(
+                "Applying {} pending migration{} on {}…",
+                pending,
+                if pending == 1 { "" } else { "s" },
+                new_branch
+            )
+        } else {
+            format!("Updating database on {}…", new_branch)
+        };
+        emitter.emit("applying", apply_msg);
         let update = DotnetEf::update_database(
             &config.project_path,
             "",
@@ -1183,6 +1428,8 @@ pub async fn switch_branch_with_migrations(
     })
     .await
     .map_err(|e| e.to_string())?;
+
+    drop(op);
 
     match result {
         Ok(result) => {

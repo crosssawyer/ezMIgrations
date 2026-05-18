@@ -31,6 +31,7 @@ function AppShell() {
     let cancelled = false;
     let unMigrations = null;
     let unBranch = null;
+    let unPhase = null;
     listen("migrations-changed", () => {
       qc.invalidateQueries({ queryKey: queryKeys.migrations });
     }).then((un) => {
@@ -50,10 +51,21 @@ function AppShell() {
       if (cancelled) un();
       else unBranch = un;
     });
+    listen("operation-phase", (event) => {
+      const { operation, message } = event?.payload ?? {};
+      if (!message) return;
+      ui.setOverlay((prev) =>
+        prev ? { ...prev, operation: operation ?? prev.operation, message } : prev
+      );
+    }).then((un) => {
+      if (cancelled) un();
+      else unPhase = un;
+    });
     return () => {
       cancelled = true;
       unMigrations?.();
       unBranch?.();
+      unPhase?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [qc, preferences?.notify_on_branch_change]);

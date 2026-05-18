@@ -45,7 +45,7 @@ export function Header({ project }) {
     >
       <div className="flex items-center gap-2 pl-16">
         <h1 className="text-sm font-semibold tracking-tight">ezMigrations</h1>
-        <span className="text-[10px] text-muted-foreground font-normal">v0.6.0</span>
+        <span className="text-[10px] text-muted-foreground font-normal">v{__APP_VERSION__}</span>
         <span
           className={cn(
             "h-2 w-2 rounded-full transition-colors",

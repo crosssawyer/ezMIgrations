@@ -1,6 +1,6 @@
 # ezMigrations
 
-A fast, lightweight desktop app for managing .NET Entity Framework Core migrations. Built with Tauri (Rust) and vanilla JS.
+A fast, lightweight desktop app for managing .NET Entity Framework Core migrations. Built with Tauri v2 (Rust) and React.
 
 ## Features
 
@@ -53,9 +53,12 @@ src-tauri/           Rust backend (Tauri v2)
     parser.rs        C# migration file parser
     process.rs       Cross-platform subprocess helper
     state.rs         App state & config models
-src/                 Frontend (vanilla JS)
-  main.js           App logic + UI
-  style.css         Dark theme styling
+src/                 Frontend (React + TanStack Query)
+  main.jsx          React app entry point
+  App.jsx           Main app shell + routing
+  components/       UI components (shadcn/ui style)
+  lib/              Queries, mutations, stores, utilities
+  globals.css       Dark theme styling (Tailwind)
 index.html           Entry point
 ```
 

@@ -65,4 +65,7 @@ pub struct AppState {
     pub watching: Mutex<bool>,
     pub watching_migrations: Mutex<bool>,
     pub watcher_cancel: Mutex<Arc<AtomicBool>>,
+    /// Set by `cancel_running_operation` so multi-step operations (e.g. branch
+    /// switch) can bail between phases when there's no EF child process to kill.
+    pub op_cancel: Arc<AtomicBool>,
 }

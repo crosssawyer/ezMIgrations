@@ -127,13 +127,125 @@ impl DotnetEf {
     ) -> Result<CommandResult, String> {
         let (mut cmd, command_display) = Self::build_ef_command(project_path, args, startup_project);
         cmd.output()
-            .map(|output| CommandResult {
-                success: output.status.success(),
-                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-                command_display: command_display.clone(),
+            .map(|output| {
+                let mut result = CommandResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                    command_display: command_display.clone(),
+                };
+                Self::enrich_with_build_diagnostics(&mut result, project_path, startup_project);
+                result
             })
             .map_err(|e| format!("Failed to execute dotnet ef: {}", e))
+    }
+
+    /// When `dotnet ef` reports "Build failed. Use dotnet build to see the errors.",
+    /// run a follow-up `dotnet build` against the same projects and append the
+    /// extracted error lines so callers see the actual compile errors instead of
+    /// the unhelpful EF message.
+    fn enrich_with_build_diagnostics(
+        result: &mut CommandResult,
+        project_path: &str,
+        startup_project: &str,
+    ) {
+        if result.success {
+            return;
+        }
+        let combined = format!("{}\n{}", result.stdout, result.stderr);
+        if !combined.contains("Build failed") {
+            return;
+        }
+        // Prefer the startup project (what EF actually compiles to load DbContext);
+        // fall back to the migrations project if no startup project is configured.
+        let build_target = if !startup_project.is_empty() {
+            startup_project
+        } else {
+            project_path
+        };
+        let build_output = Self::run_dotnet_build(build_target);
+        if build_output.trim().is_empty() {
+            return;
+        }
+        let separator = "\n\n--- dotnet build errors ---\n";
+        if !result.stderr.trim().is_empty() {
+            result.stderr.push_str(separator);
+            result.stderr.push_str(&build_output);
+        } else {
+            result.stdout.push_str(separator);
+            result.stdout.push_str(&build_output);
+        }
+    }
+
+    /// Run `dotnet build` against a project and return only the diagnostic lines
+    /// (errors and the final FAILED summary). Always returns even on success so
+    /// the caller gets *something* useful when EF claims a build failed.
+    fn run_dotnet_build(project_path: &str) -> String {
+        let project = Path::new(project_path);
+        let (cwd, target): (Option<&Path>, String) = if let Some(parent) = project.parent() {
+            if parent.as_os_str().is_empty() || !parent.exists() {
+                (None, project_path.to_string())
+            } else if let Ok(rel) = project.strip_prefix(parent) {
+                (Some(parent), rel.to_string_lossy().to_string())
+            } else {
+                (Some(parent), project_path.to_string())
+            }
+        } else {
+            (None, project_path.to_string())
+        };
+
+        let mut cmd = command("dotnet");
+        if let Ok(current_path) = env::var("PATH") {
+            let home = env::var("HOME").unwrap_or_default();
+            let extra_paths = [
+                format!("{}/.dotnet/tools", home),
+                format!("{}/.dotnet", home),
+                "/usr/local/share/dotnet".to_string(),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+            ];
+            let enriched = extra_paths
+                .iter()
+                .chain(std::iter::once(&current_path))
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(":");
+            cmd.env("PATH", enriched);
+        }
+        cmd.arg("build").arg(&target).arg("--nologo");
+        // -clp:ErrorsOnly limits the console logger to error-level messages.
+        cmd.arg("-clp:ErrorsOnly");
+        if let Some(dir) = cwd {
+            cmd.current_dir(dir);
+        }
+
+        let output = match cmd.output() {
+            Ok(o) => o,
+            Err(e) => return format!("(Failed to run dotnet build for diagnostics: {})", e),
+        };
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // -clp:ErrorsOnly trims most noise, but we still filter empties and the
+        // usage banner from `dotnet build --help`-style fallthroughs.
+        let mut lines: Vec<&str> = stdout
+            .lines()
+            .chain(stderr.lines())
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        // Cap output so a very chatty build can't swamp the error dialog.
+        const MAX_LINES: usize = 40;
+        let truncated = lines.len() > MAX_LINES;
+        if truncated {
+            lines.truncate(MAX_LINES);
+        }
+        let mut joined = lines.join("\n");
+        if truncated {
+            joined.push_str("\n… (output truncated)");
+        }
+        joined
     }
 
     fn run_ef_cancellable(
@@ -233,21 +345,27 @@ impl DotnetEf {
             stderr.push_str("Operation canceled by user.");
         }
 
-        Ok(CommandResult {
+        let mut result = CommandResult {
             success: exit_status.success() && !canceled,
             stdout,
             stderr,
             command_display,
-        })
+        };
+        if !canceled {
+            Self::enrich_with_build_diagnostics(&mut result, project_path, startup_project);
+        }
+        Ok(result)
     }
 
-    pub fn cancel_running_operation() -> Result<String, String> {
+    /// Try to kill the running EF child, if any. Returns the operation name
+    /// that was killed, or None when nothing was running.
+    pub fn cancel_running_operation() -> Result<Option<String>, String> {
         let mut guard = running_process()
             .lock()
             .map_err(|_| "Failed to lock running operation state".to_string())?;
-        let running = guard
-            .as_mut()
-            .ok_or("No cancelable operation is currently running")?;
+        let Some(running) = guard.as_mut() else {
+            return Ok(None);
+        };
 
         running.canceled = true;
         running
@@ -255,7 +373,7 @@ impl DotnetEf {
             .kill()
             .map_err(|e| format!("Failed to cancel '{}': {}", running.operation, e))?;
 
-        Ok(format!("Cancel requested for '{}'", running.operation))
+        Ok(Some(running.operation.clone()))
     }
 
     /// List all migrations and their applied status.

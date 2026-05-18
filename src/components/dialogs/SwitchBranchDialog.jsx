@@ -21,7 +21,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useBranches, useCurrentBranch } from "@/lib/queries";
 import { useSwitchBranch } from "@/lib/mutations";
-import { useUI } from "@/lib/ui-store";
 
 function BranchChip({ label, tone = "muted" }) {
   return (
@@ -68,7 +67,6 @@ function BranchCommandItem({ name, isRemote, isSelected, onSelect }) {
 }
 
 export function SwitchBranchDialog({ onClose }) {
-  const ui = useUI();
   const { data: branches = [], isLoading } = useBranches();
   const { data: currentBranch = "" } = useCurrentBranch();
   const switchBranch = useSwitchBranch();
@@ -86,17 +84,10 @@ export function SwitchBranchDialog({ onClose }) {
   const onSubmit = (e) => {
     e?.preventDefault();
     if (!selected) return;
-    ui.setOverlay({ message: `Switching to ${selected}...`, cancelable: true });
-    switchBranch.mutate({ targetBranch: selected }, {
-      onSuccess: () => {
-        ui.setOverlay(null);
-        onClose();
-      },
-      onError: () => {
-        // Leave the dialog open; the hook may replace it with migrationError.
-        ui.setOverlay(null);
-      },
-    });
+    switchBranch.mutate(
+      { targetBranch: selected },
+      { onSuccess: () => onClose() }
+    );
   };
 
   return (
