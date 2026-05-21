@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "windows"))]
 use std::env;
 use std::io::Read;
 use std::path::Path;
@@ -7,6 +8,36 @@ use std::thread;
 use std::time::Duration;
 
 use crate::process::command;
+
+/// On macOS, GUI apps inherit a minimal PATH that often doesn't include
+/// `dotnet`, so we prepend the usual install locations. On Windows the system
+/// PATH is inherited correctly and forcing a Unix-style ":"-joined PATH onto
+/// it corrupts the original entries (Windows splits on ";"), so this is a
+/// no-op there.
+#[cfg(not(target_os = "windows"))]
+fn enrich_path(cmd: &mut Command) {
+    let Ok(current_path) = env::var("PATH") else {
+        return;
+    };
+    let home = env::var("HOME").unwrap_or_default();
+    let extra_paths = [
+        format!("{}/.dotnet/tools", home),
+        format!("{}/.dotnet", home),
+        "/usr/local/share/dotnet".to_string(),
+        "/usr/local/bin".to_string(),
+        "/opt/homebrew/bin".to_string(),
+    ];
+    let enriched = extra_paths
+        .iter()
+        .chain(std::iter::once(&current_path))
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join(":");
+    cmd.env("PATH", enriched);
+}
+
+#[cfg(target_os = "windows")]
+fn enrich_path(_cmd: &mut Command) {}
 
 pub struct DotnetEf;
 
@@ -53,26 +84,7 @@ impl DotnetEf {
         let solution_dir = project.parent();
 
         let mut cmd = command("dotnet");
-
-        // macOS GUI apps inherit a minimal PATH that doesn't include dotnet.
-        // Enrich PATH with common dotnet install locations so the command resolves.
-        if let Ok(current_path) = env::var("PATH") {
-            let home = env::var("HOME").unwrap_or_default();
-            let extra_paths = [
-                format!("{}/.dotnet/tools", home),
-                format!("{}/.dotnet", home),
-                "/usr/local/share/dotnet".to_string(),
-                "/usr/local/bin".to_string(),
-                "/opt/homebrew/bin".to_string(),
-            ];
-            let enriched = extra_paths
-                .iter()
-                .chain(std::iter::once(&current_path))
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(":");
-            cmd.env("PATH", enriched);
-        }
+        enrich_path(&mut cmd);
 
         let mut display_parts: Vec<String> = vec!["dotnet".into(), "ef".into()];
         cmd.arg("ef");
@@ -195,23 +207,7 @@ impl DotnetEf {
         };
 
         let mut cmd = command("dotnet");
-        if let Ok(current_path) = env::var("PATH") {
-            let home = env::var("HOME").unwrap_or_default();
-            let extra_paths = [
-                format!("{}/.dotnet/tools", home),
-                format!("{}/.dotnet", home),
-                "/usr/local/share/dotnet".to_string(),
-                "/usr/local/bin".to_string(),
-                "/opt/homebrew/bin".to_string(),
-            ];
-            let enriched = extra_paths
-                .iter()
-                .chain(std::iter::once(&current_path))
-                .map(|s| s.as_str())
-                .collect::<Vec<_>>()
-                .join(":");
-            cmd.env("PATH", enriched);
-        }
+        enrich_path(&mut cmd);
         cmd.arg("build").arg(&target).arg("--nologo");
         // -clp:ErrorsOnly limits the console logger to error-level messages.
         cmd.arg("-clp:ErrorsOnly");
