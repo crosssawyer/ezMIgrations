@@ -1,7 +1,8 @@
 #[cfg(not(target_os = "windows"))]
 use std::env;
+use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
@@ -38,6 +39,56 @@ fn enrich_path(cmd: &mut Command) {
 
 #[cfg(target_os = "windows")]
 fn enrich_path(_cmd: &mut Command) {}
+
+/// Scan sibling directories of the migrations project for a candidate startup
+/// `.csproj`. EF's design-time DbContext factory usually lives in the API/host
+/// project, not the data project, so when the user didn't configure one we
+/// look for `Microsoft.NET.Sdk.Web` first and fall back to any sibling csproj.
+fn auto_detect_startup_project(project_path: &str) -> Option<String> {
+    let project = Path::new(project_path);
+    let project_dir: PathBuf = if project.is_file() {
+        project.parent()?.to_path_buf()
+    } else {
+        project.to_path_buf()
+    };
+    let solution_dir = project_dir.parent()?;
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in fs::read_dir(solution_dir).ok()?.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() || dir == project_dir {
+            continue;
+        }
+        let Ok(sub_entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for sub in sub_entries.flatten() {
+            let p = sub.path();
+            if p.extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.eq_ignore_ascii_case("csproj"))
+                .unwrap_or(false)
+            {
+                candidates.push(p);
+            }
+        }
+    }
+
+    for candidate in &candidates {
+        if let Ok(content) = fs::read_to_string(candidate) {
+            if content.contains("Microsoft.NET.Sdk.Web") {
+                return candidate
+                    .parent()
+                    .map(|p| p.to_string_lossy().into_owned());
+            }
+        }
+    }
+
+    candidates
+        .first()
+        .and_then(|c| c.parent())
+        .map(|p| p.to_string_lossy().into_owned())
+}
 
 pub struct DotnetEf;
 
@@ -83,8 +134,20 @@ impl DotnetEf {
         // using relative paths, e.g.: dotnet ef migrations remove --project cmms-data --startup-project cmms-api
         let solution_dir = project.parent();
 
+        // Fall back to a sibling project (typically the ASP.NET host) when the
+        // user didn't configure a startup project. Without it, EF often can't
+        // resolve the DbContext's DI options and silently returns no output.
+        let effective_startup: String = if startup_project.is_empty() {
+            auto_detect_startup_project(project_path).unwrap_or_default()
+        } else {
+            startup_project.to_string()
+        };
+
         let mut cmd = command("dotnet");
         enrich_path(&mut cmd);
+        // Force English so our stdout parser isn't defeated by localized
+        // .NET output on non-English Windows installs.
+        cmd.env("DOTNET_CLI_UI_LANGUAGE", "en");
 
         let mut display_parts: Vec<String> = vec!["dotnet".into(), "ef".into()];
         cmd.arg("ef");
@@ -106,26 +169,26 @@ impl DotnetEf {
             }
 
             // Use path relative to solution root for --startup-project
-            if !startup_project.is_empty() {
-                let sp = Path::new(startup_project);
+            if !effective_startup.is_empty() {
+                let sp = Path::new(&effective_startup);
                 if let Ok(rel) = sp.strip_prefix(sol_dir) {
                     cmd.arg("--startup-project").arg(rel);
                     display_parts.push("--startup-project".into());
                     display_parts.push(rel.to_string_lossy().to_string());
                 } else {
-                    cmd.arg("--startup-project").arg(startup_project);
+                    cmd.arg("--startup-project").arg(&effective_startup);
                     display_parts.push("--startup-project".into());
-                    display_parts.push(startup_project.to_string());
+                    display_parts.push(effective_startup.clone());
                 }
             }
         } else {
             cmd.arg("--project").arg(project_path);
             display_parts.push("--project".into());
             display_parts.push(project_path.to_string());
-            if !startup_project.is_empty() {
-                cmd.arg("--startup-project").arg(startup_project);
+            if !effective_startup.is_empty() {
+                cmd.arg("--startup-project").arg(&effective_startup);
                 display_parts.push("--startup-project".into());
-                display_parts.push(startup_project.to_string());
+                display_parts.push(effective_startup.clone());
             }
         }
 
@@ -392,6 +455,27 @@ impl DotnetEf {
                 "dotnet ef migrations list failed: {}",
                 result.stderr
             ));
+        }
+
+        // EF sometimes exits 0 even when it couldn't actually load the DbContext —
+        // it just prints the error to stdout and lists no migrations. Detect the
+        // common signatures and surface them so the user sees a real error instead
+        // of an empty migrations table.
+        for line in result.stdout.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("Unable to create")
+                || trimmed.contains("Unable to resolve service")
+                || trimmed.contains("No DbContext was found")
+                || trimmed.contains("More than one DbContext was found")
+            {
+                return Err(format!(
+                    "EF couldn't load the DbContext at design time. \
+                     This usually means the startup project is missing or wrong, \
+                     or its configuration (connection string, DI registrations) \
+                     isn't available at design time.\n\n{}",
+                    trimmed
+                ));
+            }
         }
 
         let mut migrations = Vec::new();
