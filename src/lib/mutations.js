@@ -95,7 +95,13 @@ export function useSwitchProject() {
 export function useSaveProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (project) => invoke("save_project", { project }),
+    mutationFn: (project) =>
+      invoke("save_project", {
+        name: project.name,
+        path: project.project_path,
+        dbContext: project.db_context,
+        startupProject: project.startup_project,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
       toast.success("Project saved");
@@ -107,7 +113,14 @@ export function useSaveProject() {
 export function useUpdateSavedProject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (project) => invoke("update_saved_project", { project }),
+    mutationFn: (project) =>
+      invoke("update_saved_project", {
+        id: project.id,
+        name: project.name,
+        path: project.project_path,
+        dbContext: project.db_context,
+        startupProject: project.startup_project,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.savedProjects });
       toast.success("Project updated");
