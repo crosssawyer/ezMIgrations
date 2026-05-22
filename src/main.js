@@ -133,6 +133,22 @@ function bindEvents() {
     }
   });
 
+  // Diagnostics
+  $("#btn-diag-refresh").addEventListener("click", loadDiagnostics);
+  $("#btn-diag-copy").addEventListener("click", copyDiagnostics);
+  $("#btn-diag-reveal").addEventListener("click", revealDiagnostics);
+  $("#btn-diag-clear").addEventListener("click", clearDiagnostics);
+
+  // Empty-state link to diagnostics
+  $("#empty-state-diag-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    showSettings();
+    // Scroll the diagnostics section into view once settings are open.
+    setTimeout(() => {
+      $("#diag-log")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  });
+
   // Detail panel
   $("#btn-close-detail").addEventListener("click", closeDetail);
   $$(".detail-tabs .tab").forEach((tab) => {
@@ -349,15 +365,21 @@ function renderMigrations() {
     ? migrations.filter((m) => m.name.toLowerCase().includes(query))
     : migrations;
 
+  const emptyStateMessage = $("#empty-state-message");
+  const emptyStateHint = $(".empty-state-hint");
+
   if (migrations.length === 0) {
-    emptyState.innerHTML = "<p>No migrations found. Create one to get started.</p>";
+    emptyStateMessage.textContent = "No migrations found. Create one to get started.";
+    emptyStateHint?.classList.remove("hidden");
     emptyState.classList.remove("hidden");
     updateSelectAllState();
     return;
   }
 
   if (filtered.length === 0) {
-    emptyState.innerHTML = "<p>No migrations match your filter.</p>";
+    emptyStateMessage.textContent = "No migrations match your filter.";
+    // Hide the diagnostics hint when the empty state is just a filter mismatch.
+    emptyStateHint?.classList.add("hidden");
     emptyState.classList.remove("hidden");
     updateSelectAllState();
     return;
@@ -766,6 +788,7 @@ function showSettings() {
   settingsPanel.classList.remove("hidden");
   loadSavedProjects();
   applyPreferencesToUI();
+  loadDiagnostics();
 }
 
 function closeSettings() {
@@ -1240,6 +1263,71 @@ function formatRelativeTime(timestamp) {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+// ─── Diagnostics ────────────────────────────────────────────────────
+
+async function loadDiagnostics() {
+  try {
+    const info = await invoke("get_diagnostics");
+    $("#diag-path").textContent = info.path || "(unknown)";
+    $("#diag-size").textContent = info.exists
+      ? `${formatBytes(info.size_bytes)} on disk`
+      : "(not yet created)";
+    const logEl = $("#diag-log");
+    if (info.contents && info.contents.trim()) {
+      logEl.textContent = info.contents;
+      logEl.scrollTop = logEl.scrollHeight;
+    } else {
+      logEl.textContent = "(no entries yet — trigger a refresh on a connected project to populate)";
+    }
+  } catch (err) {
+    toast("Failed to load diagnostics: " + err, "error");
+  }
+}
+
+async function copyDiagnostics() {
+  const logEl = $("#diag-log");
+  const pathEl = $("#diag-path");
+  const text = `Path: ${pathEl.textContent}\n\n${logEl.textContent}`;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast("Diagnostics copied to clipboard", "success");
+  } catch (err) {
+    toast("Failed to copy: " + err, "error");
+  }
+}
+
+async function revealDiagnostics() {
+  try {
+    await invoke("reveal_diagnostics");
+  } catch (err) {
+    toast("Failed to open folder: " + err, "error");
+  }
+}
+
+async function clearDiagnostics() {
+  showModal("Clear Diagnostics?", `
+    <p>This will delete the diagnostics log.</p>
+    <p style="color: var(--text-dim); font-size: 12px; margin-top: 6px;">
+      A fresh log will start the next time migrations refresh.
+    </p>
+  `, async () => {
+    closeModal();
+    try {
+      await invoke("clear_diagnostics");
+      await loadDiagnostics();
+      toast("Diagnostics cleared", "success");
+    } catch (err) {
+      toast("Failed to clear: " + err, "error");
+    }
+  }, { confirmText: "Clear" });
+}
+
+function formatBytes(n) {
+  if (n < 1024) return `${n} bytes`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 // ─── Util ───────────────────────────────────────────────────────────

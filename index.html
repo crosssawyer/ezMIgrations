@@ -92,7 +92,11 @@
             <tbody id="migration-tbody"></tbody>
           </table>
           <div id="empty-state" class="hidden">
-            <p>No migrations found. Create one to get started.</p>
+            <p id="empty-state-message">No migrations found. Create one to get started.</p>
+            <p class="empty-state-hint">
+              Already have migrations in this project?
+              <a href="#" id="empty-state-diag-link">View diagnostics</a> to see what EF Core returned.
+            </p>
           </div>
           <div id="loading-state" class="hidden">
             <div class="spinner"></div>
@@ -161,6 +165,33 @@
               <span class="toggle-slider"></span>
             </label>
           </div>
+
+          <div class="settings-divider"></div>
+
+          <div class="settings-section-header">
+            <h3>Diagnostics</h3>
+            <div class="diagnostics-actions">
+              <button id="btn-diag-refresh" class="btn btn-sm btn-ghost" title="Reload the latest entries">Refresh</button>
+              <button id="btn-diag-copy" class="btn btn-sm btn-ghost" title="Copy the log to your clipboard">Copy</button>
+              <button id="btn-diag-reveal" class="btn btn-sm btn-ghost" title="Open the folder containing the log">Open Folder</button>
+              <button id="btn-diag-clear" class="btn btn-sm btn-danger" title="Delete the diagnostics log">Clear</button>
+            </div>
+          </div>
+          <p class="diagnostics-hint">
+            Every migration refresh is logged here with the raw output from <code>dotnet ef migrations list</code>.
+            If migrations aren't appearing the way you expect, copy this file or paste its contents when reporting the issue.
+          </p>
+          <div class="diagnostics-meta">
+            <div class="diagnostics-path-row">
+              <span class="diagnostics-label">Path</span>
+              <code id="diag-path" class="diagnostics-path">(not yet created)</code>
+            </div>
+            <div class="diagnostics-size-row">
+              <span class="diagnostics-label">Size</span>
+              <span id="diag-size">0 bytes</span>
+            </div>
+          </div>
+          <pre id="diag-log" class="diagnostics-log">(no entries yet — trigger a refresh on a connected project to populate)</pre>
         </div>
       </section>
 

@@ -1127,6 +1127,106 @@ input[type="checkbox"]:checked::after {
   background: #fff;
 }
 
+/* ── Diagnostics ──────────────────────────────────── */
+
+.diagnostics-actions {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.diagnostics-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+
+.diagnostics-hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  padding: 1px 4px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.diagnostics-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.diagnostics-path-row,
+.diagnostics-size-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.diagnostics-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  width: 40px;
+}
+
+.diagnostics-path {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+#diag-size {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.diagnostics-log {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre;
+  word-break: normal;
+}
+
+.empty-state-hint {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.empty-state-hint a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.empty-state-hint a:hover {
+  text-decoration: underline;
+}
+
 /* ── Hotkeys Popup ─────────────────────────────────── */
 
 #hotkeys-overlay {

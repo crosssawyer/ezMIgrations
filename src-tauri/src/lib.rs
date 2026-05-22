@@ -1,4 +1,5 @@
 mod commands;
+mod diagnostics;
 mod dotnet;
 mod git;
 mod parser;
@@ -34,6 +35,9 @@ pub fn run() {
             commands::start_migration_watcher,
             commands::get_preferences,
             commands::set_preferences,
+            commands::get_diagnostics,
+            commands::clear_diagnostics,
+            commands::reveal_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

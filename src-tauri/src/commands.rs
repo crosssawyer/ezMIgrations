@@ -1,3 +1,4 @@
+use crate::diagnostics;
 use crate::dotnet::DotnetEf;
 use crate::git::GitService;
 use crate::parser::{KeepStrategy, MigrationParser, SqlStatement};
@@ -576,65 +577,113 @@ pub async fn set_preferences(
 // ─── Migration Commands ─────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration>, String> {
+pub async fn list_migrations(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<Migration>, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
 
-    let migrations = tokio::task::spawn_blocking(move || {
-        let ef_migrations = DotnetEf::list_migrations(
-            &config.project_path,
-            &config.db_context,
-            &config.startup_project,
-        )
-        .map_err(|e| enrich_ef_error(&e))?;
+    let cfg_for_blocking = config.clone();
+    let blocking_result = tokio::task::spawn_blocking(move || {
+        let ef_result = DotnetEf::list_migrations(
+            &cfg_for_blocking.project_path,
+            &cfg_for_blocking.db_context,
+            &cfg_for_blocking.startup_project,
+        );
 
         // Cache all migration files once instead of scanning the directory per migration
-        let all_files = MigrationParser::find_migration_files(&config.project_path)
+        let all_files = MigrationParser::find_migration_files(&cfg_for_blocking.project_path)
             .unwrap_or_default();
+        let file_count = all_files.len();
 
-        let mut migrations: Vec<Migration> = Vec::new();
+        match ef_result {
+            Ok(list_result) => {
+                let mut migrations: Vec<Migration> = Vec::new();
+                for (name, applied) in &list_result.migrations {
+                    let file_path = all_files.iter().find(|f| {
+                        f.file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.contains(name) || name.contains(s))
+                            .unwrap_or(false)
+                    });
 
-        for (name, applied) in &ef_migrations {
-            let file_path = all_files.iter().find(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.contains(name) || name.contains(s))
-                    .unwrap_or(false)
-            });
+                    let (has_custom_sql, custom_sql_up, custom_sql_down) =
+                        if let Some(fp) = file_path {
+                            match MigrationParser::parse_file(fp) {
+                                Ok(parsed) => (
+                                    parsed.has_custom_sql,
+                                    parsed.sql_strings_up(),
+                                    parsed.sql_strings_down(),
+                                ),
+                                Err(_) => (false, Vec::new(), Vec::new()),
+                            }
+                        } else {
+                            (false, Vec::new(), Vec::new())
+                        };
 
-            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(fp) = file_path {
-                match MigrationParser::parse_file(fp) {
-                    Ok(parsed) => (
-                        parsed.has_custom_sql,
-                        parsed.sql_strings_up(),
-                        parsed.sql_strings_down(),
-                    ),
-                    Err(_) => (false, Vec::new(), Vec::new()),
+                    migrations.push(Migration {
+                        id: name.clone(),
+                        name: name.clone(),
+                        applied: *applied,
+                        has_custom_sql,
+                        custom_sql_up,
+                        custom_sql_down,
+                        file_path: file_path.map(|p| p.to_string_lossy().to_string()),
+                    });
                 }
-            } else {
-                (false, Vec::new(), Vec::new())
-            };
 
-            migrations.push(Migration {
-                id: name.clone(),
-                name: name.clone(),
-                applied: *applied,
-                has_custom_sql,
-                custom_sql_up,
-                custom_sql_down,
-                file_path: file_path.map(|p| p.to_string_lossy().to_string()),
-            });
+                Ok((migrations, list_result, file_count))
+            }
+            Err(e) => Err((e, file_count)),
         }
-
-        Ok::<Vec<Migration>, String>(migrations)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())?;
 
-    *state.migrations.lock().unwrap() = migrations.clone();
-    Ok(migrations)
+    match blocking_result {
+        Ok((migrations, list_result, file_count)) => {
+            diagnostics::log_list_migrations(
+                &app,
+                &diagnostics::ListMigrationsEntry {
+                    project_path: &config.project_path,
+                    db_context: &config.db_context,
+                    startup_project: &config.startup_project,
+                    command_display: &list_result.command_display,
+                    duration_ms: list_result.duration_ms,
+                    exit_success: list_result.exit_success,
+                    parsed_count: list_result.migrations.len(),
+                    migration_files_found: file_count,
+                    stdout: &list_result.stdout,
+                    stderr: &list_result.stderr,
+                },
+            );
+
+            *state.migrations.lock().unwrap() = migrations.clone();
+            Ok(migrations)
+        }
+        Err((raw_err, file_count)) => {
+            // EF failed — still record a diagnostic entry so the user can share it.
+            diagnostics::log_list_migrations(
+                &app,
+                &diagnostics::ListMigrationsEntry {
+                    project_path: &config.project_path,
+                    db_context: &config.db_context,
+                    startup_project: &config.startup_project,
+                    command_display: "(see error message)",
+                    duration_ms: 0,
+                    exit_success: false,
+                    parsed_count: 0,
+                    migration_files_found: file_count,
+                    stdout: "",
+                    stderr: &raw_err,
+                },
+            );
+            Err(enrich_ef_error(&raw_err))
+        }
+    }
 }
 
 #[tauri::command]
@@ -1194,4 +1243,54 @@ pub async fn start_migration_watcher(
         "Watching for migration changes: {}",
         migrations_dir.display()
     ))
+}
+
+// ─── Diagnostics Commands ───────────────────────────────────────────
+
+#[derive(Serialize)]
+pub struct DiagnosticsInfo {
+    pub path: String,
+    pub exists: bool,
+    pub size_bytes: u64,
+    pub contents: String,
+}
+
+#[tauri::command]
+pub async fn get_diagnostics(app: AppHandle) -> Result<DiagnosticsInfo, String> {
+    let path = diagnostics::log_path(&app).ok_or("Could not resolve diagnostics path")?;
+    let (exists, size_bytes) = match std::fs::metadata(&path) {
+        Ok(meta) => (true, meta.len()),
+        Err(_) => (false, 0),
+    };
+    // Cap inline preview at 128 KB so a huge log doesn't choke the IPC layer.
+    let contents = if exists {
+        diagnostics::read_tail(&app, 128 * 1024)
+    } else {
+        String::new()
+    };
+    Ok(DiagnosticsInfo {
+        path: path.to_string_lossy().to_string(),
+        exists,
+        size_bytes,
+        contents,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_diagnostics(app: AppHandle) -> Result<(), String> {
+    diagnostics::clear(&app)
+}
+
+#[tauri::command]
+pub async fn reveal_diagnostics(app: AppHandle) -> Result<(), String> {
+    let path = diagnostics::log_path(&app).ok_or("Could not resolve diagnostics path")?;
+    if !path.exists() {
+        // Create the parent dir and an empty file so the OS reveal call has
+        // something to point at.
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        std::fs::write(&path, b"").map_err(|e| e.to_string())?;
+    }
+    diagnostics::reveal(&path)
 }

@@ -30,6 +30,19 @@ pub struct CommandResult {
     pub command_display: String,
 }
 
+/// Result of `list_migrations`: parsed migrations plus the raw subprocess
+/// output, so the caller can write a diagnostic log entry without re-running
+/// the command.
+#[derive(Debug)]
+pub struct MigrationListResult {
+    pub migrations: Vec<(String, bool)>,
+    pub stdout: String,
+    pub stderr: String,
+    pub command_display: String,
+    pub exit_success: bool,
+    pub duration_ms: u128,
+}
+
 impl CommandResult {
     /// Return the most useful error text: stderr if non-empty, otherwise stdout.
     /// Appends the executed command for easier debugging.
@@ -260,23 +273,30 @@ impl DotnetEf {
 
     /// List all migrations and their applied status.
     /// Uses `dotnet ef migrations list` which marks applied ones.
+    /// Returns the parsed list plus the raw subprocess output so the caller
+    /// can write a diagnostic log entry — important for tracking down
+    /// platform-specific parsing regressions (Windows EF output quirks).
     pub fn list_migrations(
         project_path: &str,
         db_context: &str,
         startup_project: &str,
-    ) -> Result<Vec<(String, bool)>, String> {
+    ) -> Result<MigrationListResult, String> {
         let mut args = vec!["migrations", "list"];
         if !db_context.is_empty() {
             args.push("--context");
             args.push(db_context);
         }
 
+        let started = std::time::Instant::now();
         let result = Self::run_ef(project_path, &args, startup_project)?;
+        let duration_ms = started.elapsed().as_millis();
 
         if !result.success {
+            // Return diagnostic info even on failure so the log captures it.
             return Err(format!(
-                "dotnet ef migrations list failed: {}",
-                result.stderr
+                "dotnet ef migrations list failed: {}\n\nExecuted: {}",
+                result.stderr.trim(),
+                result.command_display
             ));
         }
 
@@ -329,7 +349,14 @@ impl DotnetEf {
             }
         }
 
-        Ok(migrations)
+        Ok(MigrationListResult {
+            migrations,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            command_display: result.command_display,
+            exit_success: result.success,
+            duration_ms,
+        })
     }
 
     /// Add a new migration.
