@@ -1,33 +1,66 @@
 # ezMigrations
 
-A fast, lightweight desktop app for managing .NET Entity Framework Core migrations. Built with Tauri v2 (Rust) and React.
+A desktop app for managing .NET Entity Framework Core migrations.
+
+ezMigrations wraps `dotnet ef` in a focused UI that understands your git branches, surfaces drift the moment it appears, and preserves the things `dotnet ef migrations` quietly throws away when you squash. Built with Tauri v2 and React so it ships as a small native binary on Windows, macOS, and Linux.
+
+> Screenshots: _coming soon_
 
 ## Features
 
-- **Migration tracking** — See all migrations with applied/pending status at a glance
-- **Custom SQL capture** — Automatically extracts `migrationBuilder.Sql()` calls from migration files
-- **Squash migrations** — Consolidate multiple migrations into one while preserving custom SQL
-- **Git branch awareness** — Watches for branch changes and prompts to update the database accordingly
-- **Managed branch switching** — Uses git to compare target-branch migrations, rolls back to the latest common migration, checks out the branch, and updates the database
-- **Out-of-sync detection** — Detects foreign migrations left over from other branches, highlights them in the list, and offers a one-click revert
-- **Stable migration** — Pin a migration as a safe rollback point for branch switches
-- **Create / delete migrations** — One-click migration management through `dotnet ef`
-- **Update database** — Apply up to any migration or update to latest
-- **SQL script generation** — Generate SQL scripts between migration points
-- **Multi-project support** — Save and switch between multiple EF projects from the settings panel
-- **Preferences** — Configure notifications (e.g. disable branch-change prompts)
-- **Keyboard shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `?` help
+### Branch awareness
 
-## Prerequisites
+- **Managed branch switching** — pick a branch, and the app diffs migrations against your current HEAD, rolls the database back to the latest common migration, checks out the branch, and brings the database forward in one guided flow.
+- **Foreign migration detection** — when migrations applied in another branch show up as `Applied` after a `Pending`, ezMigrations flags them with a red border, a source-branch label, and a one-click "Revert Foreign" button.
+- **Branch-change prompts** — a file watcher on `.git/HEAD` notices when you switch branches outside the app and offers to reconcile the database. Configurable in Preferences.
+- **Stable migration pin** — mark any migration as the safe rollback point used by automated branch switches.
+- **Remote branches in the picker** — local and remote branches are listed together in the switch dialog.
 
-- [.NET SDK](https://dotnet.microsoft.com/download) with `dotnet-ef` tool installed
-- [Node.js](https://nodejs.org/) (for frontend build)
-- [Rust](https://rustup.rs/) (for Tauri backend)
+### Migration management
+
+- **Custom SQL preservation on squash** — the parser extracts every `migrationBuilder.Sql(...)` call from your migration files, deduplicates by content, and reinjects them into the squashed migration in the right order (newest wins for `Up`, original wins for `Down`). Squashing in raw `dotnet ef` loses these; ezMigrations does not.
+- **Create, remove, and apply migrations** — all the usual `dotnet ef` operations from the toolbar, with a working cancel button on every long-running command.
+- **Update database to any point** — apply forward, roll back, or jump to a specific migration.
+- **Generate SQL scripts** — produce a script between any two migration points.
+- **Drift detection** — banner appears when pending migrations are detected, and the app re-checks state every time the window regains focus.
+
+### Productivity
+
+- **Structured EF error dialog** — `dotnet ef` failures are parsed into a dialog with a plain-English cause, a suggested fix, and copy-to-clipboard for the raw output. Common misconfigurations (wrong startup project, mismatched migrations assembly) get specific guidance.
+- **Auto-detected startup project** — ezMigrations reads your solution and picks the right startup project for design-time `DbContext` discovery automatically.
+- **Per-step operation feedback** — long-running flows like managed branch switching show a phase-by-phase overlay so you know exactly which step is running.
+- **Multi-project support** — save multiple EF projects and switch between them from the settings panel.
+- **Search, filter, and shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `Esc` to clear, `?` for the full hotkey list.
+- **Toast notifications and preferences** — non-intrusive feedback for mutations and copy actions; toggle branch-change prompts in Preferences.
+
+## Install
+
+Download the latest installer for your platform from the [Releases](../../releases) page.
+
+| Platform | Installer |
+| --- | --- |
+| Windows | `.msi` (and `.exe` NSIS) |
+| macOS | `.dmg` |
+| Linux | `.deb` and `.AppImage` |
+
+### Prerequisites
+
+ezMigrations drives the EF Core CLI, so you need the .NET SDK and the `dotnet-ef` tool installed on your machine:
 
 ```bash
-# Install the EF Core CLI tool if you haven't
+# .NET SDK: https://dotnet.microsoft.com/download
 dotnet tool install --global dotnet-ef
 ```
+
+On macOS, the app will look for `dotnet` in the usual locations (`~/.dotnet/tools`, `/usr/local/share/dotnet`, `/opt/homebrew/bin`) even when launched from Finder.
+
+## Quick start
+
+1. Open ezMigrations.
+2. Click **Add project**, point it at your migrations project (`.csproj`), and optionally set a startup project and DbContext.
+3. The migration list loads and the app starts watching the project's git repository and migrations folder for changes.
+
+From here, new migrations, branch switches, and database updates run through the toolbar. Press `?` for the full hotkey list.
 
 ## Development
 
@@ -35,68 +68,23 @@ dotnet tool install --global dotnet-ef
 # Install frontend dependencies
 npm install
 
-# Run in development mode
+# Run in development (starts Vite + Tauri together)
 npm run tauri dev
 
-# Build for production
+# Build a production binary for your platform
 npm run tauri build
 ```
 
+You'll need [Node.js](https://nodejs.org/) and [Rust](https://rustup.rs/) for local development, plus the platform-specific Tauri prerequisites listed in [Tauri's setup docs](https://tauri.app/start/prerequisites/).
+
 ## Architecture
 
-```
-src-tauri/           Rust backend (Tauri v2)
-  src/
-    commands.rs      Tauri command handlers
-    dotnet.rs        dotnet ef CLI wrapper
-    git.rs           Git operations + branch detection
-    parser.rs        C# migration file parser
-    process.rs       Cross-platform subprocess helper
-    state.rs         App state & config models
-src/                 Frontend (React + TanStack Query)
-  main.jsx          React app entry point
-  App.jsx           Main app shell + routing
-  components/       UI components (shadcn/ui style)
-  lib/              Queries, mutations, stores, utilities
-  globals.css       Dark theme styling (Tailwind)
-index.html           Entry point
-```
+The Rust backend (`src-tauri/`) handles all interaction with `dotnet ef`, git, and the file system, exposing Tauri commands consumed by a React + TanStack Query frontend (`src/`). UI components follow the shadcn/ui pattern and the app uses code splitting so dialogs and settings panels load lazily.
+
+For a deeper walkthrough of the modules, command surface, state model, and frontend data flow, see [docs/architecture.md](docs/architecture.md).
 
 ## Releasing
 
-The project uses a GitHub Actions workflow to build standalone executables for Linux, Windows, and macOS and publish them as a GitHub Release.
+Releases are built by a GitHub Actions workflow that produces installers for Linux, Windows, and macOS and attaches them to a GitHub Release. The pipeline triggers on any tag matching `v*`, or via manual workflow dispatch.
 
-### Option 1: Tag push (recommended)
-
-Create and push a version tag from your local machine:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-The tag must start with `v` (e.g. `v0.1.0`, `v1.2.3`).
-
-### Option 2: Manual dispatch
-
-1. Go to the repository on GitHub
-2. Navigate to **Actions** > **Release**
-3. Click **Run workflow**
-4. Enter the version number (e.g. `0.2.0` — no `v` prefix needed)
-5. Click **Run workflow**
-
-This will create the tag automatically and trigger the full release.
-
-### What the pipeline does
-
-1. Builds native installers on each platform using Tauri:
-   - **Linux** — `.deb` and `.AppImage`
-   - **Windows** — `.msi` and `.exe` (NSIS)
-   - **macOS** — `.dmg`
-2. Creates a GitHub Release tagged with the version
-3. Attaches all installers to the release
-4. Auto-generates release notes from commit history
-
-### Downloading a release
-
-Go to the [Releases](../../releases) page and download the installer for your platform.
+For the full release procedure, version-bumping checklist, and troubleshooting notes, see [docs/releasing.md](docs/releasing.md).
