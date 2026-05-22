@@ -1682,3 +1682,174 @@ pub async fn start_migration_watcher(
         migrations_dir.display()
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ─── enrich_ef_error ────────────────────────────────────────
+
+    #[test]
+    fn enrich_ef_error_passes_through_unrelated_errors() {
+        let raw = "Something unexpected happened";
+        assert_eq!(enrich_ef_error(raw), raw);
+    }
+
+    #[test]
+    fn enrich_ef_error_explains_migrations_assembly_mismatch() {
+        let raw = "Your target project 'Foo' doesn't match your migrations assembly 'Bar'.";
+        let enriched = enrich_ef_error(raw);
+        assert!(enriched.contains("Project mismatch"));
+        assert!(enriched.contains("Migrations Project"));
+        // Original raw error should still be appended for context
+        assert!(enriched.contains(raw));
+    }
+
+    // ─── migration_name_from_path ───────────────────────────────
+
+    #[test]
+    fn migration_name_extracted_from_cs_file() {
+        let name = migration_name_from_path(Path::new("/a/b/20240101_Init.cs"));
+        assert_eq!(name.as_deref(), Some("20240101_Init"));
+    }
+
+    #[test]
+    fn migration_name_rejects_designer_files() {
+        let name = migration_name_from_path(Path::new("/a/b/20240101_Init.Designer.cs"));
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn migration_name_rejects_model_snapshot() {
+        let name = migration_name_from_path(Path::new("/a/b/MyContextModelSnapshot.cs"));
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn migration_name_rejects_non_cs_files() {
+        let name = migration_name_from_path(Path::new("/a/b/notes.txt"));
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn migration_name_handles_forward_slash_git_path() {
+        let name = migration_name_from_git_path("MyProj/Migrations/20240101_Init.cs");
+        assert_eq!(name.as_deref(), Some("20240101_Init"));
+    }
+
+    #[test]
+    fn migration_name_from_git_path_rejects_designer() {
+        let name = migration_name_from_git_path("MyProj/Migrations/20240101_Init.Designer.cs");
+        assert!(name.is_none());
+    }
+
+    // ─── migration_names_from_files ─────────────────────────────
+
+    #[test]
+    fn migration_names_filters_designer_and_snapshot() {
+        let files = vec![
+            PathBuf::from("/p/20240101_A.cs"),
+            PathBuf::from("/p/20240101_A.Designer.cs"),
+            PathBuf::from("/p/20240202_B.cs"),
+            PathBuf::from("/p/MyDbContextModelSnapshot.cs"),
+            PathBuf::from("/p/readme.md"),
+        ];
+        let names = migration_names_from_files(files);
+        assert_eq!(names, vec!["20240101_A".to_string(), "20240202_B".to_string()]);
+    }
+
+    // ─── latest_common_migration ────────────────────────────────
+
+    #[test]
+    fn latest_common_migration_returns_most_recent_shared() {
+        let current = vec!["M1".to_string(), "M2".to_string(), "M3".to_string()];
+        let target = vec!["M1".to_string(), "M2".to_string(), "M4".to_string()];
+        let common = latest_common_migration(&current, &target);
+        assert_eq!(common.as_deref(), Some("M2"));
+    }
+
+    #[test]
+    fn latest_common_migration_returns_none_when_no_overlap() {
+        let current = vec!["A".to_string(), "B".to_string()];
+        let target = vec!["X".to_string(), "Y".to_string()];
+        let common = latest_common_migration(&current, &target);
+        assert!(common.is_none());
+    }
+
+    #[test]
+    fn latest_common_migration_handles_identical_lists() {
+        let current = vec!["M1".to_string(), "M2".to_string()];
+        let target = current.clone();
+        let common = latest_common_migration(&current, &target);
+        assert_eq!(common.as_deref(), Some("M2"));
+    }
+
+    #[test]
+    fn latest_common_migration_handles_empty_inputs() {
+        assert!(latest_common_migration(&[], &["A".to_string()]).is_none());
+        assert!(latest_common_migration(&["A".to_string()], &[]).is_none());
+        assert!(latest_common_migration(&[], &[]).is_none());
+    }
+
+    // ─── derive_project_name ────────────────────────────────────
+
+    #[test]
+    fn derive_project_name_uses_directory_basename() {
+        assert_eq!(derive_project_name("/home/user/MyApp"), "MyApp");
+    }
+
+    #[test]
+    fn derive_project_name_falls_back_when_path_is_empty() {
+        assert_eq!(derive_project_name(""), "My Project");
+    }
+
+    // ─── ensure_path_exists ─────────────────────────────────────
+
+    #[test]
+    fn ensure_path_exists_ok_for_real_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = ensure_path_exists(dir.path().to_str().unwrap());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn ensure_path_exists_errors_for_missing_path() {
+        let result = ensure_path_exists("/this/path/definitely/does/not/exist/abc123");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
+    }
+
+    // ─── generate_id ────────────────────────────────────────────
+
+    #[test]
+    fn generate_id_returns_non_empty_numeric_string() {
+        let id = generate_id();
+        assert!(!id.is_empty());
+        assert!(id.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    // ─── path_relative_to_repo ──────────────────────────────────
+
+    #[test]
+    fn path_relative_to_repo_normalizes_backslashes_to_forward_slash() {
+        let repo = tempfile::tempdir().unwrap();
+        let nested = repo.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let rel =
+            path_relative_to_repo(repo.path().to_str().unwrap(), &nested).unwrap();
+        assert!(!rel.contains('\\'));
+        // On both Unix and Windows the result should be a/b
+        assert_eq!(rel.replace('\\', "/"), "a/b");
+    }
+
+    #[test]
+    fn path_relative_to_repo_errors_when_outside_repo() {
+        let repo = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        let result =
+            path_relative_to_repo(repo.path().to_str().unwrap(), outside.path());
+        assert!(result.is_err());
+    }
+}

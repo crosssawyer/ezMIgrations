@@ -603,3 +603,46 @@ impl DotnetEf {
         Self::run_ef(project_path, &args, startup_project)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(stdout: &str, stderr: &str) -> CommandResult {
+        CommandResult {
+            success: false,
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            command_display: "dotnet ef migrations list".to_string(),
+        }
+    }
+
+    #[test]
+    fn error_output_prefers_stderr_when_present() {
+        let r = result("stdout text", "stderr text");
+        let out = r.error_output();
+        assert!(out.contains("stderr text"));
+        assert!(!out.contains("stdout text"));
+    }
+
+    #[test]
+    fn error_output_falls_back_to_stdout_when_stderr_empty() {
+        let r = result("stdout text", "");
+        let out = r.error_output();
+        assert!(out.contains("stdout text"));
+    }
+
+    #[test]
+    fn error_output_falls_back_to_stdout_when_stderr_whitespace_only() {
+        let r = result("the real error", "   \n\t  ");
+        let out = r.error_output();
+        assert!(out.contains("the real error"));
+    }
+
+    #[test]
+    fn error_output_appends_command_display() {
+        let r = result("err", "");
+        let out = r.error_output();
+        assert!(out.contains("Executed: dotnet ef migrations list"));
+    }
+}

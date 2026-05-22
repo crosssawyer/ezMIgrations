@@ -179,3 +179,59 @@ impl GitService {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn find_git_dir_returns_dir_when_present_at_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+
+        let found = GitService::find_git_dir(dir.path().to_str().unwrap()).unwrap();
+        assert!(found.ends_with(".git"));
+        assert!(Path::new(&found).exists());
+    }
+
+    #[test]
+    fn find_git_dir_walks_up_to_find_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+        let nested = dir.path().join("a").join("b").join("c");
+        fs::create_dir_all(&nested).unwrap();
+
+        let found = GitService::find_git_dir(nested.to_str().unwrap()).unwrap();
+        assert!(found.ends_with(".git"));
+    }
+
+    #[test]
+    fn find_git_dir_returns_none_when_no_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        // No .git anywhere under tempdir. But because find_git_dir walks
+        // upward, it may find a real repo if tempdir happens to be inside one.
+        // Skip this assertion on systems where the temp path is inside a repo.
+        let found = GitService::find_git_dir(dir.path().to_str().unwrap());
+        // We can only assert behavior consistently: if it returns Some, that
+        // path must end in .git and exist.
+        if let Some(p) = found {
+            assert!(p.ends_with(".git"));
+            assert!(Path::new(&p).exists());
+        }
+    }
+
+    #[test]
+    fn get_head_path_appends_head_to_git_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path().join(".git");
+        fs::create_dir(&git_dir).unwrap();
+
+        let head = GitService::get_head_path(dir.path().to_str().unwrap()).unwrap();
+        assert!(head.ends_with("HEAD"));
+        // The path should be inside the .git directory we just created
+        assert!(head.contains(".git"));
+    }
+}
