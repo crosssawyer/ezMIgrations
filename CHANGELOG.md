@@ -2,6 +2,38 @@
 
 All notable changes to ezMigrations are documented here.
 
+## [1.1.0] - 2026-05-22
+
+### Added
+- **Auto-detect startup project** — detects the EF startup project from the solution and surfaces design-time `DbContext` errors with actionable messages (`a2e2e7f`)
+
+### Fixed
+- Stop corrupting `PATH` on Windows when invoking `dotnet ef` (`1abe332`)
+- Send flat args to `save_saved_project` / `update_saved_project` so saves no longer fail with a deserialization error (`77ce85c`)
+- Use numeric pre-release id for the Windows MSI bundler so releases publish successfully (`acb14ac`)
+
+## [1.0.0] - 2026-05-15
+
+### Added
+- **Frontend rewrite on React + TanStack Query + shadcn/ui** — replaces the vanilla JS UI with a component-based architecture, better state management, and a consistent design system (`a076637`)
+- **Managed branch switching** — compares target-branch migrations, rolls back to the latest common migration, checks out the branch, and updates the database in one flow (`a59a135`)
+- **Per-step operation feedback** — overlay surfaces progress for each step of long-running operations with a working cancel button (`b29ed1b`)
+- **Structured EF Core error dialog** — parses `dotnet ef` failures into a dialog with cause, suggested fix, and copy-to-clipboard (`d28374f`)
+- **Drift detection on window focus** — re-checks migration state when the app regains focus so external changes are caught immediately (`d28374f`)
+- **Toast notifications** — shared toast utility surfacing success/failure for project mutations, copy actions, and other operations (`c5bb98b`, `13d2c63`)
+- **Remote branch surfacing** — `SwitchBranchDialog` now lists remote branches alongside local ones with hover-select (`8bf65d6`)
+- **Code splitting** — dialogs, `SettingsSheet`, and `HotkeysDialog` lazy-loaded to shrink initial bundle (`5322955`)
+
+### Changed
+- Default to a sensible minimum window size on launch (`8bf65d6`)
+- Track `Cargo.lock` for reproducible Tauri builds (`abd9f5a`)
+- Bump `tauri-plugin-dialog`, Tauri API/CLI, `lucide-react`; resolve rollup advisory (`97dc0d9`, `f04d254`)
+
+### Fixed
+- Clamp dialogs to viewport and wrap footer buttons on narrow widths (`200f042`, `32abaa6`)
+- Rewrite `SwitchBranchDialog` layout so the footer is always visible (`8b8cb4f`)
+- Add error-context prefixes to all bare `errToast()` calls (`05c3b53`)
+
 ## [0.5.0] - 2026-03-05
 
 ### Added
