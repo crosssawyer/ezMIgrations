@@ -128,7 +128,9 @@ Steps per matrix entry:
      into platform installers.
    - Creates the GitHub Release (named `ezMigrations <tag>`, body `"See the
      assets below to download the installer for your platform."`, not a
-     draft, not a pre-release).
+     draft). The release is marked as a pre-release iff the tag contains a
+     `-` (e.g. `v1.1.0-1`, `v1.2.0-nightly`); plain `vX.Y.Z` tags publish as
+     full releases.
    - Uploads the built installers as release assets.
 
 Inputs / secrets:
@@ -190,11 +192,9 @@ Nightly builds use the same workflow — there is no separate nightly pipeline.
 - Tag: `vX.Y.Z-nightly` (e.g. `v1.1.0-nightly`).
 - Internal version: `X.Y.Z-N` where `N` is a monotonically increasing
   number (`1.1.0-1`, `1.1.0-2`, …). See [Windows MSI pre-release id format](#windows-msi-pre-release-id-format-acb14ac).
-- The workflow does not set `prerelease: true` for `-nightly` tags; the
-  release is created with `prerelease: false`. If you want the release
-  marked as a pre-release on the Releases page, do it manually in the UI
-  after the run finishes (or edit `release.yml` to flip the flag for
-  `-nightly` tags).
+- The workflow auto-detects pre-releases: any tag containing a `-` (so
+  `v1.1.0-nightly`, `v1.1.0-1`, `v1.2.0-rc1`, etc.) is published with
+  `prerelease: true`. Plain `vX.Y.Z` tags publish as full releases.
 
 ## Lessons learned / footguns
 
