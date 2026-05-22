@@ -105,6 +105,16 @@ impl GitService {
         Ok(status.success())
     }
 
+    /// `origin/feature/foo` → `feature/foo`. Returns the input unchanged if
+    /// there's no `/` (which shouldn't happen for a real remote ref, but is
+    /// handled defensively).
+    pub fn local_name_from_remote_branch(branch: &str) -> &str {
+        branch
+            .split_once('/')
+            .map(|(_, name)| name)
+            .unwrap_or(branch)
+    }
+
     pub fn switch_branch(repo_path: &str, branch: &str) -> Result<(), String> {
         if Self::local_branch_exists(repo_path, branch)? {
             Self::run_git(repo_path, &["checkout", branch])?;
@@ -112,10 +122,7 @@ impl GitService {
         }
 
         if Self::remote_branch_exists(repo_path, branch)? {
-            let local_name = branch
-                .split_once('/')
-                .map(|(_, name)| name)
-                .unwrap_or(branch);
+            let local_name = Self::local_name_from_remote_branch(branch);
 
             if Self::local_branch_exists(repo_path, local_name)? {
                 Self::run_git(repo_path, &["checkout", local_name])?;
@@ -233,5 +240,29 @@ mod tests {
         assert!(head.ends_with("HEAD"));
         // The path should be inside the .git directory we just created
         assert!(head.contains(".git"));
+    }
+
+    #[test]
+    fn local_name_strips_single_remote_segment() {
+        assert_eq!(
+            GitService::local_name_from_remote_branch("origin/main"),
+            "main"
+        );
+    }
+
+    #[test]
+    fn local_name_strips_only_first_segment_for_nested_branch() {
+        assert_eq!(
+            GitService::local_name_from_remote_branch("origin/feature/foo"),
+            "feature/foo"
+        );
+    }
+
+    #[test]
+    fn local_name_returns_input_when_no_slash() {
+        assert_eq!(
+            GitService::local_name_from_remote_branch("main"),
+            "main"
+        );
     }
 }

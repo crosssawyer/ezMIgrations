@@ -16,11 +16,7 @@ use crate::process::command;
 /// it corrupts the original entries (Windows splits on ";"), so this is a
 /// no-op there.
 #[cfg(not(target_os = "windows"))]
-fn enrich_path(cmd: &mut Command) {
-    let Ok(current_path) = env::var("PATH") else {
-        return;
-    };
-    let home = env::var("HOME").unwrap_or_default();
+fn compute_enriched_path(current_path: &str, home: &str) -> String {
     let extra_paths = [
         format!("{}/.dotnet/tools", home),
         format!("{}/.dotnet", home),
@@ -28,13 +24,21 @@ fn enrich_path(cmd: &mut Command) {
         "/usr/local/bin".to_string(),
         "/opt/homebrew/bin".to_string(),
     ];
-    let enriched = extra_paths
+    extra_paths
         .iter()
-        .chain(std::iter::once(&current_path))
         .map(|s| s.as_str())
+        .chain(std::iter::once(current_path))
         .collect::<Vec<_>>()
-        .join(":");
-    cmd.env("PATH", enriched);
+        .join(":")
+}
+
+#[cfg(not(target_os = "windows"))]
+fn enrich_path(cmd: &mut Command) {
+    let Ok(current_path) = env::var("PATH") else {
+        return;
+    };
+    let home = env::var("HOME").unwrap_or_default();
+    cmd.env("PATH", compute_enriched_path(&current_path, &home));
 }
 
 #[cfg(target_os = "windows")]
@@ -644,5 +648,43 @@ mod tests {
         let r = result("err", "");
         let out = r.error_output();
         assert!(out.contains("Executed: dotnet ef migrations list"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn enriched_path_prepends_extra_dirs_in_order() {
+        let enriched = compute_enriched_path("/usr/bin:/bin", "/Users/alice");
+        let parts: Vec<&str> = enriched.split(':').collect();
+        assert_eq!(parts[0], "/Users/alice/.dotnet/tools");
+        assert_eq!(parts[1], "/Users/alice/.dotnet");
+        assert_eq!(parts[2], "/usr/local/share/dotnet");
+        assert_eq!(parts[3], "/usr/local/bin");
+        assert_eq!(parts[4], "/opt/homebrew/bin");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn enriched_path_preserves_existing_path_at_end() {
+        let enriched = compute_enriched_path("/usr/bin:/bin", "/Users/alice");
+        assert!(enriched.ends_with(":/usr/bin:/bin"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn enriched_path_joins_with_colons_not_semicolons() {
+        // Regression: forcing colon-joined PATH onto Windows breaks subprocess
+        // env (it splits on ";"). Helper is only compiled on non-windows, but
+        // assert the separator anyway so the contract is locked in.
+        let enriched = compute_enriched_path("/usr/bin", "/home/x");
+        assert!(!enriched.contains(';'));
+        assert!(enriched.contains(':'));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn enriched_path_handles_empty_home() {
+        let enriched = compute_enriched_path("/usr/bin", "");
+        assert!(enriched.starts_with("/.dotnet/tools"));
+        assert!(enriched.ends_with(":/usr/bin"));
     }
 }
