@@ -1,17 +1,47 @@
 mod commands;
 mod dotnet;
 mod git;
+// `mcp` and `state` are `pub` so the `ezmigrations-mcp` binary in `src/bin/`
+// (which sees the crate as an external dependency named `ez_migrations_lib`)
+// can reach `start_mcp_server` and `AppState`. The remaining modules stay
+// private — only the Tauri command surface needs them.
+pub mod mcp;
 mod parser;
 mod process;
-mod state;
+pub mod state;
+
+use std::sync::Arc;
 
 use state::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // AppState is wrapped in `Arc` so the MCP server and Tauri commands can
+    // share one logical instance. Commands resolve it as
+    // `State<'_, Arc<AppState>>`; field access still works through Arc's
+    // `Deref` impl.
+    let state = Arc::new(AppState::default());
+    let mcp_state = state.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .setup(move |_app| {
+            // Spawn the MCP server on Tauri's async runtime so it doesn't
+            // block startup. Bind failures are logged but non-fatal to the
+            // GUI — the user can still drive the app manually.
+            tauri::async_runtime::spawn(async move {
+                match mcp::start_mcp_server(mcp_state).await {
+                    Ok(port) => {
+                        eprintln!("MCP server listening on http://127.0.0.1:{}/mcp", port);
+                    }
+                    Err(e) => {
+                        eprintln!("MCP server failed to start: {}", e);
+                    }
+                }
+            });
+            Ok(())
+        })
+        .manage(state)
         .invoke_handler(tauri::generate_handler![
             commands::set_project,
             commands::get_project,

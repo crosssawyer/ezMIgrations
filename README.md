@@ -34,6 +34,59 @@ ezMigrations wraps `dotnet ef` in a focused UI that understands your git branche
 - **Search, filter, and shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `Esc` to clear, `?` for the full hotkey list. The migrations table is fully keyboard-navigable with arrow keys.
 - **Toast notifications and preferences** — non-intrusive feedback for mutations and copy actions; toggle branch-change prompts in Preferences.
 
+## MCP server
+
+ezMigrations ships an embedded MCP (Model Context Protocol) server so AI agents can drive the same workflows the GUI offers. While the desktop app is running it exposes all 23 backend commands as MCP tools plus 8 read-only state resources over loopback HTTP. The server advertises its port in a per-user `mcp-port.json` file under the OS app-data directory; the JSON includes the full `http://127.0.0.1:<port>/mcp` URL to feed to any streamable-HTTP MCP client. No authentication — the listener is loopback-only.
+
+See [docs/mcp.md](docs/mcp.md) for the full integration guide, the tool / resource catalog, and troubleshooting notes.
+
+## Using ezMigrations
+
+ezMigrations runs in two modes — open the desktop app for hands-on work, or run the headless binary so AI agents can drive it.
+
+### Desktop (GUI)
+
+The normal way to use ezMigrations. Launches a window with the full migration manager. The embedded MCP server starts automatically while the window is open — any MCP client can connect alongside you without any extra setup.
+
+```bash
+# After install, launch from your OS launcher or app directory.
+# For development, from the repo root:
+npm run tauri dev        # starts Vite + Tauri together
+npm run tauri build      # produces the installer for your platform
+```
+
+### Headless (CLI)
+
+A standalone `ezmigrations-mcp` binary that runs the MCP server with no window. Use this for CI jobs, automated agents, or any host where the desktop isn't running.
+
+```bash
+# Build the binary (requires Rust; see Development section)
+cargo build --release --bin ezmigrations-mcp --manifest-path src-tauri/Cargo.toml
+
+# Run it
+./src-tauri/target/release/ezmigrations-mcp
+# → ezmigrations-mcp listening on http://127.0.0.1:<port>/mcp (headless)
+```
+
+The headless binary refuses to start if the GUI is already running (it checks the port file's PID for liveness). It runs until `ctrl-c`. Same 23 tools, same 8 resources, same port file location as GUI mode.
+
+Point any MCP client at the live port — read it from `mcp-port.json` after startup:
+
+```jsonc
+{
+  "mcpServers": {
+    "ezmigrations": {
+      "type": "http",
+      "url": "http://127.0.0.1:<port>/mcp"
+    }
+  }
+}
+```
+
+**Quick agent debrief:** To brief an AI agent on what ezMigrations does before it connects to MCP, copy [docs/agent-debrief.md](docs/agent-debrief.md) into the agent's system prompt or first message.
+
+See [docs/mcp.md](docs/mcp.md) for the platform-specific port file path, a worked Claude Code example, and the full agent integration guide.
+
 ## Install
 
 Download the latest installer for your platform from the [Releases](../../releases) page.

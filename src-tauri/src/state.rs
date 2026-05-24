@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -68,6 +69,11 @@ pub struct AppState {
     /// Set by `cancel_running_operation` so multi-step operations (e.g. branch
     /// switch) can bail between phases when there's no EF child process to kill.
     pub op_cancel: Arc<AtomicBool>,
+    /// Held by every EF-mutating command (and the MCP tool wrappers) for the
+    /// duration of the operation, so concurrent calls from the GUI and the MCP
+    /// server can't stomp on each other. Async-aware so async tool handlers
+    /// don't block a tokio worker thread while they wait.
+    pub op_mutex: Arc<AsyncMutex<()>>,
 }
 
 #[cfg(test)]

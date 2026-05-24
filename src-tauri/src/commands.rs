@@ -209,7 +209,7 @@ fn ensure_path_exists(path: &str) -> Result<(), String> {
     }
 }
 
-fn reset_watchers(state: &AppState) {
+pub(crate) fn reset_watchers(state: &AppState) {
     {
         let mut cancel = state.watcher_cancel.lock().unwrap();
         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -278,7 +278,7 @@ fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig>
 #[tauri::command]
 pub async fn set_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     project_path: String,
     db_context: String,
     startup_project: String,
@@ -344,7 +344,7 @@ pub async fn set_project(
 #[tauri::command]
 pub async fn get_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<Option<ProjectInfo>, String> {
     // If config is already in memory, return it
     {
@@ -488,7 +488,7 @@ pub async fn get_project(
 #[tauri::command]
 pub async fn get_saved_projects(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<Vec<SavedProject>, String> {
     // Ensure app_config is loaded
     {
@@ -522,7 +522,7 @@ pub async fn get_saved_projects(
 #[tauri::command]
 pub async fn save_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     name: String,
     path: String,
     db_context: String,
@@ -552,7 +552,7 @@ pub async fn save_project(
 #[tauri::command]
 pub async fn update_saved_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     id: String,
     name: String,
     path: String,
@@ -591,7 +591,7 @@ pub async fn update_saved_project(
 #[tauri::command]
 pub async fn delete_saved_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
     let mut ac = state.app_config.lock().unwrap();
@@ -612,7 +612,7 @@ pub async fn delete_saved_project(
 #[tauri::command]
 pub async fn switch_project(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<ProjectInfo, String> {
     let project = {
@@ -662,7 +662,7 @@ pub async fn switch_project(
 #[tauri::command]
 pub async fn set_stable_migration(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     migration_name: Option<String>,
 ) -> Result<(), String> {
     let mut ac = state.app_config.lock().unwrap();
@@ -680,7 +680,7 @@ pub async fn set_stable_migration(
 // ─── Preferences Commands ───────────────────────────────────────────
 
 #[tauri::command]
-pub async fn get_preferences(state: State<'_, AppState>) -> Result<Preferences, String> {
+pub async fn get_preferences(state: State<'_, Arc<AppState>>) -> Result<Preferences, String> {
     let ac = state.app_config.lock().unwrap();
     Ok(ac.preferences.clone())
 }
@@ -688,7 +688,7 @@ pub async fn get_preferences(state: State<'_, AppState>) -> Result<Preferences, 
 #[tauri::command]
 pub async fn set_preferences(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     preferences: Preferences,
 ) -> Result<(), String> {
     let mut ac = state.app_config.lock().unwrap();
@@ -700,7 +700,7 @@ pub async fn set_preferences(
 // ─── Migration Commands ─────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration>, String> {
+pub async fn list_migrations(state: State<'_, Arc<AppState>>) -> Result<Vec<Migration>, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
@@ -764,13 +764,18 @@ pub async fn list_migrations(state: State<'_, AppState>) -> Result<Vec<Migration
 #[tauri::command]
 pub async fn add_migration(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     name: String,
 ) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    // Serialize EF-mutating ops across the GUI and the MCP server so two
+    // dotnet ef invocations can't race on the same migrations dir.
+    let op_mutex = state.op_mutex.clone();
+    let _op_guard = op_mutex.lock().await;
 
     let op = PhasedOp::new(&app, &state, "add_migration");
     op.emitter()
@@ -801,13 +806,17 @@ pub async fn add_migration(
 #[tauri::command]
 pub async fn remove_migration(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     force: bool,
 ) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    // Serialize EF-mutating ops across the GUI and the MCP server.
+    let op_mutex = state.op_mutex.clone();
+    let _op_guard = op_mutex.lock().await;
 
     let op = PhasedOp::new(&app, &state, "remove_migration");
     op.emitter().emit(
@@ -843,13 +852,17 @@ pub async fn remove_migration(
 #[tauri::command]
 pub async fn update_database(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     target: String,
 ) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    // Serialize EF-mutating ops across the GUI and the MCP server.
+    let op_mutex = state.op_mutex.clone();
+    let _op_guard = op_mutex.lock().await;
 
     let label = if target.is_empty() {
         "latest".to_string()
@@ -890,7 +903,7 @@ pub async fn update_database(
 }
 
 #[tauri::command]
-pub async fn cancel_running_operation(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn cancel_running_operation(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     // Signal multi-step operations (e.g. branch switch) to bail at the next phase.
     state
         .op_cancel
@@ -908,7 +921,7 @@ pub async fn cancel_running_operation(state: State<'_, AppState>) -> Result<Stri
 
 #[tauri::command]
 pub async fn get_migration_sql(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     migration_name: String,
 ) -> Result<MigrationSqlInfo, String> {
     let config = {
@@ -955,7 +968,7 @@ pub struct MigrationSqlInfo {
 #[tauri::command]
 pub async fn squash_migrations(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     from_migration: String,
     to_migration: String,
     new_name: String,
@@ -965,6 +978,10 @@ pub async fn squash_migrations(
         guard.as_ref().ok_or("No project configured")?.clone()
     };
     let migrations = state.migrations.lock().unwrap().clone();
+
+    // Serialize EF-mutating ops across the GUI and the MCP server.
+    let op_mutex = state.op_mutex.clone();
+    let _op_guard = op_mutex.lock().await;
 
     let op = PhasedOp::new(&app, &state, "squash");
     let emitter = op.emitter();
@@ -1157,7 +1174,7 @@ pub async fn squash_migrations(
 
 #[tauri::command]
 pub async fn generate_script(
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     from: String,
     to: String,
 ) -> Result<String, String> {
@@ -1208,7 +1225,7 @@ pub struct BranchInfo {
 }
 
 #[tauri::command]
-pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<BranchInfo>, String> {
+pub async fn list_git_branches(state: State<'_, Arc<AppState>>) -> Result<Vec<BranchInfo>, String> {
     let project_path = {
         let guard = state.config.lock().unwrap();
         guard
@@ -1250,13 +1267,17 @@ pub async fn fetch_remote(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 pub async fn switch_branch_with_migrations(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
     target_branch: String,
 ) -> Result<BranchSwitchResult, String> {
     let config = {
         let guard = state.config.lock().unwrap();
         guard.as_ref().ok_or("No project configured")?.clone()
     };
+
+    // Serialize EF-mutating ops across the GUI and the MCP server.
+    let op_mutex = state.op_mutex.clone();
+    let _op_guard = op_mutex.lock().await;
 
     let project_path_for_error = config.project_path.clone();
     let op = PhasedOp::new(&app, &state, "switch_branch");
@@ -1462,7 +1483,7 @@ pub async fn switch_branch_with_migrations(
 }
 
 #[tauri::command]
-pub async fn get_current_branch(state: State<'_, AppState>) -> Result<String, String> {
+pub async fn get_current_branch(state: State<'_, Arc<AppState>>) -> Result<String, String> {
     let project_path = {
         let guard = state.config.lock().unwrap();
         guard
@@ -1483,7 +1504,7 @@ pub async fn get_current_branch(state: State<'_, AppState>) -> Result<String, St
 #[tauri::command]
 pub async fn start_branch_watcher(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
@@ -1512,7 +1533,7 @@ pub async fn start_branch_watcher(
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
-                clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+                clear_branch_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
                 eprintln!("Failed to create watcher: {}", e);
                 return;
             }
@@ -1520,7 +1541,7 @@ pub async fn start_branch_watcher(
 
         let parent = Path::new(&head_path_clone).parent().unwrap();
         if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-            clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+            clear_branch_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
             eprintln!("Failed to watch .git directory: {}", e);
             return;
         }
@@ -1590,7 +1611,7 @@ pub async fn start_branch_watcher(
             }
         }
 
-        clear_branch_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+        clear_branch_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
     });
 
     Ok(format!("Watching for branch changes: {}", head_path))
@@ -1606,7 +1627,7 @@ struct BranchChangeEvent {
 #[tauri::command]
 pub async fn start_migration_watcher(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
     let config = {
         let guard = state.config.lock().unwrap();
@@ -1633,14 +1654,14 @@ pub async fn start_migration_watcher(
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
-                clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+                clear_migration_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
                 eprintln!("Failed to create migration watcher: {}", e);
                 return;
             }
         };
 
         if let Err(e) = watcher.watch(Path::new(&migrations_dir_str), RecursiveMode::Recursive) {
-            clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+            clear_migration_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
             eprintln!("Failed to watch migrations directory: {}", e);
             return;
         }
@@ -1689,7 +1710,7 @@ pub async fn start_migration_watcher(
             }
         }
 
-        clear_migration_watcher_if_current(&app.state::<AppState>(), &cancel_token);
+        clear_migration_watcher_if_current(&app.state::<Arc<AppState>>(), &cancel_token);
     });
 
     Ok(format!(

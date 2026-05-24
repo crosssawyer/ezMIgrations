@@ -13,6 +13,11 @@ ezMigrations is a Tauri v2 desktop app:
   shells out to `dotnet ef` and `git`.
 - The React frontend (`src/`) talks to Rust exclusively through
   `invoke("command_name", args)` (see `src/lib/tauri.js`).
+- A second consumer — an in-process MCP server (`src-tauri/src/mcp/`) —
+  exposes the same backend commands as MCP tools over a loopback HTTP
+  port so external AI agents can drive the same flows. Both consumers
+  share the single `Arc<AppState>` so an MCP-triggered mutation
+  appears in the GUI's cache immediately.
 - TanStack Query owns *server* state (anything that came from Rust:
   migrations, branches, project config, preferences). The Query cache is
   the single source of truth for that data and is invalidated either by
@@ -24,40 +29,37 @@ ezMigrations is a Tauri v2 desktop app:
   (`operation-phase`) which feeds `OperationOverlay.jsx`.
 
 ```
- ┌────────────────────────────────────────────────────────────────┐
- │  React (src/)                                                  │
- │  ┌───────────────────────┐    ┌──────────────────────────────┐ │
- │  │ TanStack Query cache  │◄──►│ Components (Header, MainView,│ │
- │  │ keys: project,        │    │  MigrationsTable, dialogs/…) │ │
- │  │  migrations, branches │    └──────────────┬───────────────┘ │
- │  └─────────▲─────────────┘                   │                 │
- │            │                                 ▼                 │
- │            │                  ┌─────────────────────────────┐  │
- │            │                  │ UIProvider (React Context)  │  │
- │            │                  │ overlay, dialog, checked, … │  │
- │            │                  └─────────────────────────────┘  │
- │            │   queries.js  ▲           ▲                       │
- │            │   mutations.js│           │ openDialog/setOverlay │
- │            ▼               │           │                       │
- │  ┌───────────────────────────────────────────────────────────┐ │
- │  │ src/lib/tauri.js     invoke(cmd, args)   listen(event)    │ │
- │  └────────────────────┬───────────────────┬──────────────────┘ │
- └─────────────────────  │  ───────────────  │  ──────────────────┘
-                         │ Tauri IPC         │ events
- ┌─────────────────────  ▼  ───────────────  ▼  ──────────────────┐
- │ Rust (src-tauri/src/)                                          │
- │  commands.rs  ── invoke_handler entrypoints                    │
- │      │                                                         │
- │      ├─► dotnet.rs  ──► process::command("dotnet")  ──► ef CLI │
- │      ├─► git.rs     ──► process::command("git")     ──► git    │
- │      ├─► parser.rs  ──► reads/writes *.cs migration files      │
- │      └─► state.rs   ──► Mutex<AppConfig>, Mutex<Migrations>, … │
- │                                                                │
- │  File watchers (notify crate) emit:                            │
- │    "migrations-changed" — when *.cs in Migrations/ changes     │
- │    "branch-changed"     — when .git/HEAD changes               │
- │    "operation-phase"    — per-step progress for long ops       │
- └────────────────────────────────────────────────────────────────┘
+ ┌──────────────────────────────────────┐   ┌─────────────────────────┐
+ │  React (src/)                        │   │ External AI agent       │
+ │  ┌───────────────────────┐  ┌──────┐ │   │ (Claude, etc.)          │
+ │  │ TanStack Query cache  │◄►│ UI   │ │   │                         │
+ │  └─────────▲─────────────┘  └──┬───┘ │   │ MCP client over         │
+ │            │  invoke / listen   │     │   │ streamable HTTP         │
+ │  ┌─────────┴───────────────────▼───┐ │   └───────────┬─────────────┘
+ │  │ src/lib/tauri.js                │ │               │
+ │  └────────────────┬────────────────┘ │               │
+ └──────────────  Tauri IPC  ───────────┘   ┌───────────▼─────────────┐
+                  │  events                  │ axum loopback listener  │
+ ┌────────────────▼─────────────────────────────────────────▼─────────┐
+ │ Rust (src-tauri/src/)                                              │
+ │                                                                    │
+ │  commands.rs ── invoke_handler entrypoints (Tauri commands)        │
+ │  mcp/server.rs ── EzMigrationsServer (MCP tools + resources)       │
+ │      │                  │                                          │
+ │      │   ┌──────────────┘   shared Arc<AppState>                   │
+ │      ▼   ▼                                                         │
+ │  ┌─────────────────────────────────────────────────────────────┐   │
+ │  │ dotnet.rs  ──► process::command("dotnet")  ──► ef CLI       │   │
+ │  │ git.rs     ──► process::command("git")     ──► git          │   │
+ │  │ parser.rs  ──► reads/writes *.cs migration files            │   │
+ │  │ state.rs   ──► Mutex<AppConfig>, Mutex<Migrations>, op_mutex│   │
+ │  └─────────────────────────────────────────────────────────────┘   │
+ │                                                                    │
+ │  File watchers (notify crate) emit Tauri IPC events to the GUI:    │
+ │    "migrations-changed" — when *.cs in Migrations/ changes         │
+ │    "branch-changed"     — when .git/HEAD changes                   │
+ │    "operation-phase"    — per-step progress for long ops           │
+ └────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Backend (Rust / Tauri)
@@ -209,6 +211,66 @@ methods:
 `std::process::Command` with `CREATE_NO_WINDOW` set on Windows so
 child processes don't flash a console. Every shell-out in
 `dotnet.rs` and `git.rs` goes through this.
+
+### `src-tauri/src/mcp/` — MCP server
+
+`src-tauri/src/mcp/` is the second consumer of the backend, alongside
+the Tauri IPC handler. It runs an in-process MCP (Model Context
+Protocol) server on a loopback HTTP port so external AI agents can
+drive ezMigrations the same way the React UI does. The Rust SDK
+`rmcp` (Anthropic's official crate) provides the protocol, tool /
+resource macros, and the streamable-HTTP transport.
+
+- `mcp/mod.rs` (SWE-A) — Bootstraps the server during
+  `tauri::Builder::default().setup(...)`: binds the Axum router from
+  `server::build_axum_router(state)` to `127.0.0.1:0` (a random
+  loopback port), spawns the server on the Tokio runtime, and writes
+  `mcp-port.json` (port + pid + url) into the app's data dir so
+  clients can discover it.
+- `mcp/server.rs` (`EzMigrationsServer`) — The `rmcp`
+  `ServerHandler`. The `#[tool_router] impl` block declares every
+  tool with a `#[tool(description = "…")]` macro; arg structs use
+  `schemars::JsonSchema` so the SDK can publish input schemas.
+  `ServerCapabilities::instructions` is set from
+  `mcp/instructions.rs` so every client gets the same debrief on
+  connect. The server is constructed per session via the
+  `StreamableHttpService` factory, but every instance shares the
+  single `Arc<AppState>`.
+- `mcp/resources.rs` — Read-only resource handlers (`list_resources`,
+  `list_resource_templates`, `read_resource`). Eight URIs under the
+  `ezmigrations://` scheme: 7 fixed (project, projects, preferences,
+  migrations, branches, branches/current, app/status) and one
+  templated (`migrations/{name}/sql`). The resource module also owns
+  the shared `list_migrations_inner` helper used by both the tool and
+  the resource so they stay in lock-step.
+- `mcp/instructions.rs` — A `pub const INSTRUCTIONS: &str = "…"`
+  containing the multi-paragraph debrief returned in
+  `ServerInfo.instructions`: what ezMigrations is, what the agent can
+  drive, the active-project requirement, the EF single-flight rule,
+  and an explicit list of destructive tools.
+
+Concurrency: the 5 mutating EF tools (`add_migration`,
+`remove_migration`, `update_database`, `squash_migrations`,
+`switch_branch_with_migrations`) acquire `state.op_mutex` (an
+`Arc<tokio::sync::Mutex<()>>` on `AppState`) before doing any work.
+The Tauri commands for the same operations acquire the same mutex,
+so MCP and the GUI can't trample each other on a shared `dotnet ef`
+invocation. `cancel_running_operation` still works across both
+consumers — it flips `op_cancel` and kills the registered child.
+
+Tool bodies deliberately duplicate the orchestration in
+`commands.rs` instead of calling those commands directly: the
+Tauri commands depend on `tauri::State<AppState>` and
+`tauri::AppHandle` (for `app.emit("operation-phase", …)`), and the
+MCP server has neither. The duplicate paths use the same
+`DotnetEf::*` / `GitService::*` / `MigrationParser::*` helpers, just
+without event emission. The "phase" UI overlay only shows up in the
+desktop window; for MCP, the per-step progress is collapsed into a
+single final response string. Surfacing it via rmcp's
+`notify_progress` is a v2 task.
+
+User-facing details (port file location, agent config snippets, full
+tool / resource catalog, troubleshooting) live in [docs/mcp.md](mcp.md).
 
 ## Frontend (React + TanStack Query + shadcn/ui)
 
