@@ -9,6 +9,7 @@ export const queryKeys = {
   currentBranch: ["current-branch"],
   savedProjects: ["saved-projects"],
   preferences: ["preferences"],
+  hasDbConnection: (projectId) => ["has-db-connection", projectId],
 };
 
 export function useProject() {
@@ -58,6 +59,15 @@ export function useSavedProjects() {
     queryKey: queryKeys.savedProjects,
     queryFn: () => invoke("get_saved_projects"),
     staleTime: 30_000,
+  });
+}
+
+export function useHasDbConnection(projectId, { enabled = true } = {}) {
+  return useQuery({
+    queryKey: queryKeys.hasDbConnection(projectId),
+    queryFn: () => invoke("has_db_connection", { projectId }),
+    enabled: enabled && Boolean(projectId),
+    staleTime: Infinity,
   });
 }
 

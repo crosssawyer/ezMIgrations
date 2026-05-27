@@ -1,7 +1,5 @@
-use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-use tauri::State;
 use tiberius::{Client, Config};
 use tokio::net::TcpStream;
 use tokio_util::compat::{Compat, TokioAsyncWriteCompatExt};
@@ -124,40 +122,30 @@ async fn fetch_history(conn_string: &str) -> Result<Vec<DbHistoryRow>, String> {
 // These let users verify against `__EFMigrationsHistory` directly, independent
 // of `dotnet ef migrations list`. The connection string is stored in the OS
 // keyring (not the JSON config) so passwords never hit disk in plaintext.
-
-fn active_project_id(state: &State<'_, AppState>) -> Result<String, String> {
-    state
-        .app_config
-        .lock()
-        .unwrap()
-        .active_project_id
-        .clone()
-        .ok_or_else(|| "No active project".to_string())
-}
+//
+// `project_id` is taken explicitly — the project being edited in settings is
+// not always the active project, so we don't infer it from AppState here.
 
 #[tauri::command]
 pub async fn set_db_connection(
-    state: State<'_, AppState>,
+    project_id: String,
     connection_string: String,
 ) -> Result<(), String> {
-    let id = active_project_id(&state)?;
-    tokio::task::spawn_blocking(move || store_connection_string(&id, &connection_string))
+    tokio::task::spawn_blocking(move || store_connection_string(&project_id, &connection_string))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn clear_db_connection(state: State<'_, AppState>) -> Result<(), String> {
-    let id = active_project_id(&state)?;
-    tokio::task::spawn_blocking(move || clear_connection_string(&id))
+pub async fn clear_db_connection(project_id: String) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || clear_connection_string(&project_id))
         .await
         .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub async fn has_db_connection(state: State<'_, AppState>) -> Result<bool, String> {
-    let id = active_project_id(&state)?;
-    let result = tokio::task::spawn_blocking(move || load_connection_string(&id))
+pub async fn has_db_connection(project_id: String) -> Result<bool, String> {
+    let result = tokio::task::spawn_blocking(move || load_connection_string(&project_id))
         .await
         .map_err(|e| e.to_string())??;
     Ok(result.is_some())
@@ -173,9 +161,8 @@ pub async fn test_db_connection(connection_string: String) -> Result<(), String>
 }
 
 #[tauri::command]
-pub async fn fetch_db_history(state: State<'_, AppState>) -> Result<Vec<DbHistoryRow>, String> {
-    let id = active_project_id(&state)?;
-    let conn = tokio::task::spawn_blocking(move || load_connection_string(&id))
+pub async fn fetch_db_history(project_id: String) -> Result<Vec<DbHistoryRow>, String> {
+    let conn = tokio::task::spawn_blocking(move || load_connection_string(&project_id))
         .await
         .map_err(|e| e.to_string())??
         .ok_or_else(|| "No connection string configured for this project".to_string())?;

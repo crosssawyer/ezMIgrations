@@ -129,6 +129,36 @@ export function useUpdateSavedProject() {
   });
 }
 
+export function useSetDbConnection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId, connectionString }) =>
+      invoke("set_db_connection", { projectId, connectionString }),
+    onSuccess: (_data, { projectId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.hasDbConnection(projectId) });
+    },
+    onError: errToast("Failed to save database connection"),
+  });
+}
+
+export function useClearDbConnection() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ projectId }) => invoke("clear_db_connection", { projectId }),
+    onSuccess: (_data, { projectId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.hasDbConnection(projectId) });
+    },
+    onError: errToast("Failed to clear database connection"),
+  });
+}
+
+export function useTestDbConnection() {
+  return useMutation({
+    mutationFn: ({ connectionString }) =>
+      invoke("test_db_connection", { connectionString }),
+  });
+}
+
 export function useDeleteSavedProject() {
   const qc = useQueryClient();
   return useMutation({
