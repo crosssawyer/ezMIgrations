@@ -6,7 +6,9 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Eye, Play, Pin, PinOff, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown } from "lucide-react";
+import { Eye, Play, Pin, PinOff, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, Copy } from "lucide-react";
+
+import { copyToClipboard } from "@/lib/utils";
 
 import {
   Table,
@@ -170,7 +172,7 @@ function SortHeader({ column, children }) {
   );
 }
 
-export function MigrationsTable({ migrations, isLoading, isFetching, project, foreignNames }) {
+export function MigrationsTable({ migrations, isLoading, isFetching, isError, error, project, foreignNames }) {
   const { checked, setChecked, toggleChecked, setSelectedMigrationId, selectedMigrationId, searchQuery, setSearchQuery } = useUI();
   const { applyTo, isApplying } = useApplyTo();
   const removeMigration = useRemoveLastOrForce(migrations);
@@ -216,6 +218,37 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
         <Spinner className="size-5" />
         <span className="text-sm">Loading migrations...</span>
+      </div>
+    );
+  }
+
+  if (isError && migrations.length === 0) {
+    const message = error?.message || String(error || "Unknown error");
+    return (
+      <div className="flex flex-1 items-start justify-center p-6">
+        <div className="max-w-2xl w-full rounded-md border border-destructive/40 bg-destructive/5 p-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm font-semibold text-destructive">
+            <AlertTriangle className="h-4 w-4" />
+            Couldn't list migrations
+          </div>
+          <pre className="font-mono text-xs leading-relaxed text-foreground/90 whitespace-pre-wrap break-words max-h-80 overflow-auto rounded border border-border bg-background/60 p-3">
+{message}
+          </pre>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              This is the raw error from <code>dotnet ef migrations list</code>. Share this with support to diagnose.
+            </p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => copyToClipboard(message, { successMessage: "Error copied to clipboard" })}
+            >
+              <Copy className="h-3.5 w-3.5 mr-1.5" />
+              Copy
+            </Button>
+          </div>
+        </div>
       </div>
     );
   }
