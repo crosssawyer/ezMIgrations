@@ -1,4 +1,3 @@
-#[cfg(not(target_os = "windows"))]
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -10,11 +9,10 @@ use std::time::Duration;
 
 use crate::process::command;
 
-/// On macOS, GUI apps inherit a minimal PATH that often doesn't include
-/// `dotnet`, so we prepend the usual install locations. On Windows the system
-/// PATH is inherited correctly and forcing a Unix-style ":"-joined PATH onto
-/// it corrupts the original entries (Windows splits on ";"), so this is a
-/// no-op there.
+/// GUI apps inherit a minimal/stale PATH from the OS shell, which often misses
+/// the directories where `dotnet` and `dotnet-ef` live. We prepend the usual
+/// install locations so spawned commands can find them. The path separator and
+/// candidate directories differ per-platform.
 #[cfg(not(target_os = "windows"))]
 fn compute_enriched_path(current_path: &str, home: &str) -> String {
     let extra_paths = [
@@ -32,6 +30,20 @@ fn compute_enriched_path(current_path: &str, home: &str) -> String {
         .join(":")
 }
 
+#[cfg(target_os = "windows")]
+fn compute_enriched_path(current_path: &str, user_profile: &str, program_files: &str) -> String {
+    let extra_paths = [
+        format!("{}\\.dotnet\\tools", user_profile),
+        format!("{}\\dotnet", program_files),
+    ];
+    extra_paths
+        .iter()
+        .map(|s| s.as_str())
+        .chain(std::iter::once(current_path))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 #[cfg(not(target_os = "windows"))]
 fn enrich_path(cmd: &mut Command) {
     let Ok(current_path) = env::var("PATH") else {
@@ -42,7 +54,18 @@ fn enrich_path(cmd: &mut Command) {
 }
 
 #[cfg(target_os = "windows")]
-fn enrich_path(_cmd: &mut Command) {}
+fn enrich_path(cmd: &mut Command) {
+    let Ok(current_path) = env::var("PATH") else {
+        return;
+    };
+    let user_profile = env::var("USERPROFILE").unwrap_or_default();
+    let program_files =
+        env::var("ProgramFiles").unwrap_or_else(|_| "C:\\Program Files".to_string());
+    cmd.env(
+        "PATH",
+        compute_enriched_path(&current_path, &user_profile, &program_files),
+    );
+}
 
 /// Scan sibling directories of the migrations project for a candidate startup
 /// `.csproj`. EF's design-time DbContext factory usually lives in the API/host
