@@ -228,20 +228,6 @@ export function useRemoveMigration() {
   });
 }
 
-export function useSetStable() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ migrationName }) => invoke("set_stable_migration", { migrationName }),
-    onSuccess: (_, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.project });
-      toast.success(
-        vars.migrationName ? `Stable migration set to ${vars.migrationName}` : "Stable migration cleared"
-      );
-    },
-    onError: errToast("Failed to set stable migration"),
-  });
-}
-
 export function useSwitchBranch() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();

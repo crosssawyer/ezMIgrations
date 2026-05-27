@@ -1,3 +1,4 @@
+use crate::db_history;
 use crate::dotnet::DotnetEf;
 use crate::git::GitService;
 use crate::parser::{KeepStrategy, MigrationParser, SqlStatement};
@@ -159,7 +160,6 @@ pub struct ProjectInfo {
     pub db_context: String,
     pub startup_project: String,
     pub branch: String,
-    pub stable_migration: Option<String>,
 }
 
 fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
@@ -258,7 +258,6 @@ fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig>
         project_path: legacy.project_path.clone(),
         db_context: legacy.db_context.clone(),
         startup_project: legacy.startup_project.clone(),
-        stable_migration: None,
     };
 
     let app_config = AppConfig {
@@ -299,17 +298,17 @@ pub async fn set_project(
     };
 
     // Upsert into app_config
-    let (project_id, stable_migration) = {
+    let project_id = {
         let mut ac = state.app_config.lock().unwrap();
         // Find existing by path or create new
-        let (id, stable) = if let Some(existing) = ac
+        let id = if let Some(existing) = ac
             .projects
             .iter_mut()
             .find(|p| p.project_path == project_path)
         {
             existing.db_context = db_context.clone();
             existing.startup_project = startup_project.clone();
-            (existing.id.clone(), existing.stable_migration.clone())
+            existing.id.clone()
         } else {
             let id = generate_id();
             ac.projects.push(SavedProject {
@@ -318,13 +317,12 @@ pub async fn set_project(
                 project_path: project_path.clone(),
                 db_context: db_context.clone(),
                 startup_project: startup_project.clone(),
-                stable_migration: None,
             });
-            (id, None)
+            id
         };
         ac.active_project_id = Some(id.clone());
         save_app_config(&app, &ac)?;
-        (id, stable)
+        id
     };
 
     *state.config.lock().unwrap() = Some(config.clone());
@@ -337,7 +335,6 @@ pub async fn set_project(
         db_context: config.db_context,
         startup_project: config.startup_project,
         branch,
-        stable_migration,
     })
 }
 
@@ -351,19 +348,13 @@ pub async fn get_project(
         let config = state.config.lock().unwrap();
         if config.is_some() {
             let branch = state.current_branch.lock().unwrap().clone();
-            let ac = state.app_config.lock().unwrap();
-            let active_id = ac.active_project_id.clone();
-            let stable_migration = active_id
-                .as_ref()
-                .and_then(|id| ac.projects.iter().find(|p| &p.id == id))
-                .and_then(|p| p.stable_migration.clone());
+            let active_id = state.app_config.lock().unwrap().active_project_id.clone();
             return Ok(config.as_ref().map(|c| ProjectInfo {
                 id: active_id,
                 path: c.project_path.clone(),
                 db_context: c.db_context.clone(),
                 startup_project: c.startup_project.clone(),
                 branch,
-                stable_migration,
             }));
         }
     }
@@ -396,7 +387,6 @@ pub async fn get_project(
             db_context: c.db_context.clone(),
             startup_project: c.startup_project.clone(),
             branch,
-            stable_migration: None, // legacy projects don't have stable migration
         }));
     }
 
@@ -433,7 +423,6 @@ pub async fn get_project(
                                     db_context: config.db_context,
                                     startup_project: config.startup_project,
                                     branch,
-                                    stable_migration: proj.stable_migration.clone(),
                                 }));
                             }
                         }
@@ -479,7 +468,6 @@ pub async fn get_project(
         db_context: config.db_context,
         startup_project: config.startup_project,
         branch,
-        stable_migration: None,
     }))
 }
 
@@ -537,7 +525,6 @@ pub async fn save_project(
         project_path: path,
         db_context,
         startup_project,
-        stable_migration: None,
     };
 
     {
@@ -605,6 +592,10 @@ pub async fn delete_saved_project(
         reset_watchers(&state);
     }
 
+    // Best-effort: drop any stored DB connection string for this project. If the
+    // keyring is unavailable we don't want to block project deletion on it.
+    let _ = db_history::clear_connection_string(&id);
+
     save_app_config(&app, &ac)?;
     Ok(())
 }
@@ -655,26 +646,7 @@ pub async fn switch_project(
         db_context: project.db_context,
         startup_project: project.startup_project,
         branch,
-        stable_migration: project.stable_migration,
     })
-}
-
-#[tauri::command]
-pub async fn set_stable_migration(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    migration_name: Option<String>,
-) -> Result<(), String> {
-    let mut ac = state.app_config.lock().unwrap();
-    let active_id = ac.active_project_id.clone().ok_or("No active project")?;
-    let proj = ac
-        .projects
-        .iter_mut()
-        .find(|p| p.id == active_id)
-        .ok_or("Active project not found")?;
-    proj.stable_migration = migration_name;
-    save_app_config(&app, &ac)?;
-    Ok(())
 }
 
 // ─── Preferences Commands ───────────────────────────────────────────
@@ -1563,7 +1535,6 @@ pub async fn start_branch_watcher(
                                 BranchChangeEvent {
                                     old_branch: old,
                                     new_branch,
-                                    reverted_to_stable: false,
                                 },
                             );
                         }
@@ -1585,7 +1556,6 @@ pub async fn start_branch_watcher(
 struct BranchChangeEvent {
     old_branch: String,
     new_branch: String,
-    reverted_to_stable: bool,
 }
 
 #[tauri::command]

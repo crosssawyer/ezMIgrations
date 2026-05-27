@@ -1,4 +1,5 @@
 mod commands;
+mod db_history;
 mod dotnet;
 mod git;
 mod parser;
@@ -32,10 +33,14 @@ pub fn run() {
             commands::update_saved_project,
             commands::delete_saved_project,
             commands::switch_project,
-            commands::set_stable_migration,
             commands::start_migration_watcher,
             commands::get_preferences,
             commands::set_preferences,
+            db_history::set_db_connection,
+            db_history::clear_db_connection,
+            db_history::has_db_connection,
+            db_history::test_db_connection,
+            db_history::fetch_db_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

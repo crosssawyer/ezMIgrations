@@ -39,13 +39,13 @@ function AppShell() {
       else unMigrations = un;
     });
     listen("branch-changed", (event) => {
-      const { old_branch, new_branch, reverted_to_stable } = event.payload;
+      const { old_branch, new_branch } = event.payload;
       ui.setPreviousBranch(old_branch);
       ui.setSyncDismissed(false);
       qc.setQueryData(queryKeys.currentBranch, new_branch);
       qc.invalidateQueries({ queryKey: queryKeys.migrations });
       if (preferences?.notify_on_branch_change !== false) {
-        ui.openDialog("branchChanged", { old_branch, new_branch, reverted_to_stable });
+        ui.openDialog("branchChanged", { old_branch, new_branch });
       }
     }).then((un) => {
       if (cancelled) un();
@@ -128,7 +128,7 @@ function AppShell() {
             <span className="text-sm">Loading project...</span>
           </div>
         ) : project ? (
-          <MainView project={project} />
+          <MainView />
         ) : (
           <SetupView />
         )}

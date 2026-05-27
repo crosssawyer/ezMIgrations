@@ -8,7 +8,7 @@ import { useMigrations } from "@/lib/queries";
 import { useUI } from "@/lib/ui-store";
 import { detectOutOfSync } from "./migrations/detect-sync";
 
-export function MainView({ project }) {
+export function MainView() {
   const { selectedMigrationId } = useUI();
   const { data: migrations = [], isLoading, isFetching, isError, error } = useMigrations();
 
@@ -29,7 +29,6 @@ export function MainView({ project }) {
           isFetching={isFetching}
           isError={isError}
           error={error}
-          project={project}
           foreignNames={foreignNames}
         />
         {selectedMigrationId ? <DetailPanel migrations={migrations} /> : null}

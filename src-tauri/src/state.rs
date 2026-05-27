@@ -16,7 +16,6 @@ pub struct SavedProject {
     pub project_path: String,
     pub db_context: String,
     pub startup_project: String,
-    pub stable_migration: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,30 +88,37 @@ mod tests {
     }
 
     #[test]
-    fn saved_project_roundtrips_with_stable_migration() {
+    fn saved_project_roundtrips_through_json() {
         let original = SavedProject {
             id: "1".to_string(),
             name: "App".to_string(),
             project_path: "/p".to_string(),
             db_context: "Ctx".to_string(),
             startup_project: "/s".to_string(),
-            stable_migration: Some("20240101_Init".to_string()),
         };
         let json = serde_json::to_string(&original).unwrap();
         let back: SavedProject = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.stable_migration.as_deref(), Some("20240101_Init"));
+        assert_eq!(back.id, "1");
         assert_eq!(back.name, "App");
+        assert_eq!(back.project_path, "/p");
+        assert_eq!(back.db_context, "Ctx");
+        assert_eq!(back.startup_project, "/s");
     }
 
     #[test]
-    fn saved_project_roundtrips_without_stable_migration() {
-        let original = SavedProject {
-            stable_migration: None,
-            ..SavedProject::default()
-        };
-        let json = serde_json::to_string(&original).unwrap();
-        let back: SavedProject = serde_json::from_str(&json).unwrap();
-        assert!(back.stable_migration.is_none());
+    fn saved_project_ignores_legacy_stable_migration_field() {
+        // Existing user configs may still have stable_migration on disk. Serde
+        // ignores unknown fields by default, so deserialization should succeed.
+        let json = r#"{
+            "id": "1",
+            "name": "App",
+            "project_path": "/p",
+            "db_context": "Ctx",
+            "startup_project": "/s",
+            "stable_migration": "20240101_Init"
+        }"#;
+        let back: SavedProject = serde_json::from_str(json).unwrap();
+        assert_eq!(back.name, "App");
     }
 
     #[test]
@@ -145,7 +151,6 @@ mod tests {
                 project_path: "/x".to_string(),
                 db_context: "C".to_string(),
                 startup_project: "/y".to_string(),
-                stable_migration: Some("M".to_string()),
             }],
             active_project_id: Some("abc".to_string()),
             preferences: Preferences {

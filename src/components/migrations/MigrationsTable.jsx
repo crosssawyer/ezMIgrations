@@ -6,7 +6,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Eye, Play, Pin, PinOff, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, Copy } from "lucide-react";
+import { Eye, Play, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, Copy } from "lucide-react";
 
 import { copyToClipboard } from "@/lib/utils";
 
@@ -26,9 +26,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/lib/ui-store";
 import { useApplyTo, useRemoveLastOrForce } from "./row-actions";
-import { useSetStable } from "@/lib/mutations";
 
-function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable }) {
+function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, foreignNames, applyTo, isApplying, removeMigration }) {
   return [
     {
       id: "select",
@@ -67,7 +66,6 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
       ),
       cell: ({ row }) => {
         const m = row.original;
-        const isStable = project?.stable_migration === m.name;
         const isForeign = foreignNames.has(m.name);
         return (
           <div className="flex items-center gap-2 min-w-0">
@@ -77,11 +75,6 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
             >
               {m.name}
             </button>
-            {isStable && (
-              <Badge variant="primary" size="xs" className="font-semibold uppercase tracking-wider shrink-0">
-                <Pin className="h-2.5 w-2.5" /> Stable
-              </Badge>
-            )}
             {isForeign && (
               <Badge size="xs" className="font-semibold uppercase tracking-wider shrink-0 border-destructive/40 bg-destructive/10 text-destructive">
                 Foreign
@@ -119,11 +112,10 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
     },
     {
       id: "actions",
-      size: 168,
+      size: 132,
       header: () => <span className="block text-right">Actions</span>,
       cell: ({ row }) => {
         const m = row.original;
-        const isStable = project?.stable_migration === m.name;
         return (
           <div className="flex items-center gap-0.5 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
             <Button size="xxs" variant="ghost" onClick={() => setSelectedMigrationId(m.id)} title="View details">
@@ -131,15 +123,6 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
             </Button>
             <Button size="xxs" variant="ghost" onClick={() => applyTo(m)} disabled={isApplying} title="Update DB to this migration">
               {isApplying ? <Spinner className="size-3" /> : <Play className="h-3 w-3" />}
-            </Button>
-            <Button
-              size="xxs"
-              variant="ghost"
-              onClick={() => setStable.mutate({ migrationName: isStable ? null : m.name })}
-              title={isStable ? "Unset stable migration" : "Set as stable migration"}
-              className={cn(isStable && "text-primary")}
-            >
-              {isStable ? <PinOff className="h-3 w-3" /> : <Pin className="h-3 w-3" />}
             </Button>
             <Button
               size="xxs"
@@ -171,15 +154,14 @@ function SortHeader({ column, children }) {
   );
 }
 
-export function MigrationsTable({ migrations, isLoading, isFetching, isError, error, project, foreignNames }) {
+export function MigrationsTable({ migrations, isLoading, isFetching, isError, error, foreignNames }) {
   const { checked, setChecked, toggleChecked, setSelectedMigrationId, selectedMigrationId, searchQuery, setSearchQuery } = useUI();
   const { applyTo, isApplying } = useApplyTo();
   const removeMigration = useRemoveLastOrForce(migrations);
-  const setStable = useSetStable();
 
   const columns = React.useMemo(
-    () => buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable }),
-    [checked, setChecked, toggleChecked, setSelectedMigrationId, project, foreignNames, applyTo, isApplying, removeMigration, setStable]
+    () => buildColumns({ checked, setChecked, toggleChecked, setSelectedMigrationId, foreignNames, applyTo, isApplying, removeMigration }),
+    [checked, setChecked, toggleChecked, setSelectedMigrationId, foreignNames, applyTo, isApplying, removeMigration]
   );
 
   const table = useReactTable({
