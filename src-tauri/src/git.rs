@@ -10,6 +10,10 @@ impl GitService {
         let output = command("git")
             .args(args)
             .current_dir(repo_path)
+            // Never block on an interactive credential/askpass prompt — fail
+            // fast instead. Matters for network ops like `fetch`; harmless for
+            // the local commands that also flow through here.
+            .env("GIT_TERMINAL_PROMPT", "0")
             .output()
             .map_err(|e| format!("Failed to run git: {}", e))?;
 
@@ -31,8 +35,9 @@ impl GitService {
     }
 
     pub fn has_remotes(repo_path: &str) -> Result<bool, String> {
+        // `run_git` already trims its output.
         let output = Self::run_git(repo_path, &["remote"])?;
-        Ok(!output.trim().is_empty())
+        Ok(!output.is_empty())
     }
 
     /// Fetch the latest refs from all remotes, pruning remote-tracking

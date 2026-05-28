@@ -247,8 +247,9 @@ export function useFetchRemote() {
   return useMutation({
     mutationFn: () => invoke("fetch_remote"),
     onSuccess: () => {
+      // Fetch only updates remote-tracking refs; it never moves HEAD, so the
+      // current branch can't change — just refresh the branch list.
       qc.invalidateQueries({ queryKey: queryKeys.branches });
-      qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
       toast.success("Fetched latest from remote");
     },
     onError: errToast("Failed to fetch from remote"),

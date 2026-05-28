@@ -73,14 +73,26 @@ describe("SwitchBranchDialog", () => {
     expect(screen.getByText("Remote")).toBeInTheDocument();
   });
 
-  it("invokes fetch_remote when the Fetch button is clicked", async () => {
+  it("fetches, then refetches branches without refetching the current branch", async () => {
     const user = userEvent.setup();
+    const callsTo = (cmd) => invoke.mock.calls.filter((c) => c[0] === cmd).length;
+
     renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
-    const fetchBtn = screen.getByRole("button", { name: /fetch/i });
-    await user.click(fetchBtn);
-    await waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("fetch_remote");
-    });
+    // Wait for the initial branch list load to settle before counting.
+    await waitFor(() => expect(callsTo("list_git_branches")).toBeGreaterThan(0));
+    const branchListCallsBefore = callsTo("list_git_branches");
+    const currentBranchCallsBefore = callsTo("get_current_branch");
+
+    await user.click(screen.getByRole("button", { name: /fetch/i }));
+
+    // The mutation runs fetch_remote …
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("fetch_remote"));
+    // … and on success invalidates the branch list so it refetches.
+    await waitFor(() =>
+      expect(callsTo("list_git_branches")).toBeGreaterThan(branchListCallsBefore)
+    );
+    // Fetch never moves HEAD, so the current branch must NOT be refetched.
+    expect(callsTo("get_current_branch")).toBe(currentBranchCallsBefore);
   });
 
   it("invokes switch_branch_with_migrations with the selected branch on submit", async () => {

@@ -109,7 +109,7 @@ export function SwitchBranchDialog({ onClose }) {
               size="sm"
               className="shrink-0 gap-1.5"
               onClick={() => fetchRemote.mutate()}
-              disabled={fetchRemote.isPending}
+              disabled={fetchRemote.isPending || switchBranch.isPending}
               title="Fetch the latest branches from the remote"
             >
               <RefreshCw
@@ -164,7 +164,7 @@ export function SwitchBranchDialog({ onClose }) {
 
           <DialogFooter className="shrink-0 px-5 py-3">
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button type="submit" size="sm" disabled={!selected || isLoading || switchBranch.isPending}>
+            <Button type="submit" size="sm" disabled={!selected || isLoading || switchBranch.isPending || fetchRemote.isPending}>
               {switchBranch.isPending ? "Switching…" : "Switch & Update"}
             </Button>
           </DialogFooter>
