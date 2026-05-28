@@ -2,6 +2,15 @@
 
 All notable changes to ezMigrations are documented here.
 
+## [1.2.0] - 2026-05-27
+
+### Added
+- **Verify migrations against `__EFMigrationsHistory` directly** — opt-in, per-project SQL Server connection string (stored in the OS keyring, never the config file). When configured, the migrations table reflects the canonical DB history rather than `dotnet ef migrations list`, so cases where EF silently falls back to local files (design-time `DbContext` connect failures) no longer hide drift. Orphan rows — DB entries with no local file — appear inline with an amber "In DB only" badge.
+- **"What's new" banner** — first-launch hint after the 1.2.0 upgrade points users at the new database-connection field in project settings; auto-hides once a connection is configured.
+
+### Removed
+- **Stable-migration pin** — manual pin/unpin of a baseline migration has been superseded by the per-branch baseline that the git integration tracks automatically. Existing `stable_migration` fields in saved configs are silently ignored on load.
+
 ## [1.1.0] - 2026-05-22
 
 ### Added

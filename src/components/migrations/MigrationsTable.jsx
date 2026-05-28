@@ -6,7 +6,7 @@ import {
   getSortedRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { Eye, Play, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, Copy } from "lucide-react";
+import { Eye, Play, Trash2, FileCode2, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle, Copy, Database } from "lucide-react";
 
 import { copyToClipboard } from "@/lib/utils";
 
@@ -41,7 +41,12 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
             checked={all ? true : some ? "indeterminate" : false}
             onCheckedChange={(v) => {
               if (v) {
-                const next = new Set(table.getRowModel().rows.map((r) => r.original.id));
+                const next = new Set(
+                  table
+                    .getRowModel()
+                    .rows.filter((r) => !r.original.is_orphan)
+                    .map((r) => r.original.id)
+                );
                 setChecked(next);
               } else {
                 setChecked(new Set());
@@ -51,13 +56,16 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
           />
         );
       },
-      cell: ({ row }) => (
-        <Checkbox
-          checked={checked.has(row.original.id)}
-          onCheckedChange={() => toggleChecked(row.original.id)}
-          aria-label={`Select ${row.original.name}`}
-        />
-      ),
+      cell: ({ row }) =>
+        row.original.is_orphan ? (
+          <span className="block w-3.5" />
+        ) : (
+          <Checkbox
+            checked={checked.has(row.original.id)}
+            onCheckedChange={() => toggleChecked(row.original.id)}
+            aria-label={`Select ${row.original.name}`}
+          />
+        ),
     },
     {
       accessorKey: "name",
@@ -67,14 +75,24 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
       cell: ({ row }) => {
         const m = row.original;
         const isForeign = foreignNames.has(m.name);
+        const isOrphan = m.is_orphan;
         return (
           <div className="flex items-center gap-2 min-w-0">
-            <button
-              onClick={() => setSelectedMigrationId(m.id)}
-              className="font-mono text-[11px] text-left hover:text-primary transition-colors truncate"
-            >
-              {m.name}
-            </button>
+            {isOrphan ? (
+              <span
+                className="font-mono text-[11px] text-left truncate text-muted-foreground italic"
+                title="This migration is in the database but has no local file"
+              >
+                {m.name}
+              </span>
+            ) : (
+              <button
+                onClick={() => setSelectedMigrationId(m.id)}
+                className="font-mono text-[11px] text-left hover:text-primary transition-colors truncate"
+              >
+                {m.name}
+              </button>
+            )}
             {isForeign && (
               <Badge size="xs" className="font-semibold uppercase tracking-wider shrink-0 border-destructive/40 bg-destructive/10 text-destructive">
                 Foreign
@@ -86,18 +104,9 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
     },
     {
       accessorKey: "applied",
-      size: 100,
+      size: 130,
       header: ({ column }) => <SortHeader column={column}>Status</SortHeader>,
-      cell: ({ row }) =>
-        row.original.applied ? (
-          <Badge size="sm" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
-            <span className="h-1 w-1 rounded-full bg-emerald-400" /> Applied
-          </Badge>
-        ) : (
-          <Badge variant="muted" size="sm">
-            <span className="h-1 w-1 rounded-full bg-muted-foreground" /> Pending
-          </Badge>
-        ),
+      cell: ({ row }) => <StatusBadge migration={row.original} />,
     },
     {
       accessorKey: "has_custom_sql",
@@ -116,6 +125,23 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
       header: () => <span className="block text-right">Actions</span>,
       cell: ({ row }) => {
         const m = row.original;
+        // Orphan rows have no local file — Apply / Remove are meaningless. Offer
+        // a single Copy action so the user can paste the migration id into a
+        // ticket or branch.
+        if (m.is_orphan) {
+          return (
+            <div className="flex items-center justify-end opacity-60 group-hover:opacity-100 transition-opacity">
+              <Button
+                size="xxs"
+                variant="ghost"
+                onClick={() => copyToClipboard(m.name, { successMessage: "Migration id copied" })}
+                title="Copy migration id"
+              >
+                <Copy className="h-3 w-3" />
+              </Button>
+            </div>
+          );
+        }
         return (
           <div className="flex items-center gap-0.5 justify-end opacity-60 group-hover:opacity-100 transition-opacity">
             <Button size="xxs" variant="ghost" onClick={() => setSelectedMigrationId(m.id)} title="View details">
@@ -138,6 +164,39 @@ function buildColumns({ checked, setChecked, toggleChecked, setSelectedMigration
       },
     },
   ];
+}
+
+function StatusBadge({ migration }) {
+  // When DB history is configured, in_db_state is the source of truth — EF's
+  // `applied` field can lie if the design-time DbContext couldn't connect.
+  // When DB history is not configured (in_db_state === null), fall back to
+  // EF's `applied` value.
+  if (migration.in_db_state === "orphan") {
+    return (
+      <Badge
+        size="sm"
+        className="border-amber-500/40 bg-amber-500/10 text-amber-300"
+        title="This migration is in the database but has no matching local file"
+      >
+        <Database className="h-2.5 w-2.5" />
+        In DB only
+      </Badge>
+    );
+  }
+  if (migration.in_db_state === "in_db" || (migration.in_db_state === null && migration.applied)) {
+    return (
+      <Badge size="sm" className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+        <span className="h-1 w-1 rounded-full bg-emerald-400" />
+        Applied
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant="muted" size="sm">
+      <span className="h-1 w-1 rounded-full bg-muted-foreground" />
+      Pending
+    </Badge>
+  );
 }
 
 function SortHeader({ column, children }) {
@@ -261,7 +320,11 @@ export function MigrationsTable({ migrations, isLoading, isFetching, isError, er
               <TableRow
                 key={row.id}
                 data-state={isSelected ? "selected" : undefined}
-                className={cn("group h-9", isForeign && "border-l-2 border-l-destructive")}
+                className={cn(
+                  "group h-9",
+                  isForeign && "border-l-2 border-l-destructive",
+                  m.is_orphan && "border-l-2 border-l-amber-500 bg-amber-500/[0.03]"
+                )}
               >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell key={cell.id} style={{ width: cell.column.columnDef.size ? `${cell.column.columnDef.size}px` : undefined }}>

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useForm } from "@tanstack/react-form";
-import { CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, Loader2, Database } from "lucide-react";
 
 import {
   Dialog,
@@ -13,7 +13,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { FolderInput } from "@/components/FolderInput";
 import {
   useSaveProject,
@@ -23,6 +22,13 @@ import {
   useTestDbConnection,
 } from "@/lib/mutations";
 import { useHasDbConnection } from "@/lib/queries";
+import { invoke } from "@/lib/tauri";
+
+function errorMessage(err, fallback) {
+  if (typeof err === "string") return err;
+  if (err && typeof err.message === "string") return err.message;
+  return fallback;
+}
 
 export function ProjectDialog({ onClose, mode, project }) {
   const isEdit = mode === "editProject";
@@ -32,6 +38,10 @@ export function ProjectDialog({ onClose, mode, project }) {
   const clearDbConn = useClearDbConnection();
 
   const hasDbConn = useHasDbConnection(project?.id, { enabled: isEdit });
+
+  // Captured after a successful save so we can keep the dialog open with a
+  // visible "Saved" state instead of silently closing.
+  const [saveStatus, setSaveStatus] = React.useState(null);
 
   const form = useForm({
     defaultValues: {
@@ -54,28 +64,46 @@ export function ProjectDialog({ onClose, mode, project }) {
         startup_project: value.startup_project.trim(),
       };
 
-      const saved = isEdit
-        ? await update.mutateAsync(payload)
-        : await save.mutateAsync(payload);
+      // Project save — wrap so a backend failure renders inline instead of
+      // throwing through react-form (which swallows the error silently).
+      let saved;
+      try {
+        saved = isEdit
+          ? await update.mutateAsync(payload)
+          : await save.mutateAsync(payload);
+      } catch (err) {
+        const message = errorMessage(err, "Project save failed");
+        setSaveStatus({ projectError: message, dbStatus: null, ignored_keys: [] });
+        return;
+      }
 
       const trimmedConn = db_connection_string.trim();
+      let ignored_keys = [];
+      let dbStatus = null;
       if (trimmedConn) {
-        // Best-effort: surface the project save even if keyring write fails.
         try {
-          await setDbConn.mutateAsync({
+          ignored_keys = await setDbConn.mutateAsync({
             projectId: saved.id,
             connectionString: trimmedConn,
           });
-        } catch {
-          /* mutation already toasts the error */
+          // Verification read: confirm the value actually round-trips. On macOS,
+          // an unsigned-binary keychain prompt can be denied, so a "successful"
+          // write that subsequent reads can't see is a real possibility.
+          const verified = await invoke("has_db_connection", { projectId: saved.id });
+          dbStatus = verified
+            ? "saved"
+            : "Saved to keyring, but read-back returned no entry. Your OS keyring may have denied access — check for any prompts and try again.";
+        } catch (err) {
+          dbStatus = errorMessage(err, "Connection save failed");
         }
       }
 
-      onClose();
+      setSaveStatus({ projectError: null, dbStatus, ignored_keys });
     },
   });
 
   const pending = save.isPending || update.isPending || setDbConn.isPending;
+  const saved = Boolean(saveStatus);
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
@@ -151,14 +179,27 @@ export function ProjectDialog({ onClose, mode, project }) {
               isEdit={isEdit}
               projectId={project?.id}
               configured={Boolean(hasDbConn.data)}
+              checkError={hasDbConn.isError ? errorMessage(hasDbConn.error, "Couldn't read keyring") : null}
               clearDbConn={clearDbConn}
             />
+
+            {saveStatus && <SavePostStatus status={saveStatus} />}
           </div>
           <DialogFooter className="px-5 py-3">
-            <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button type="submit" size="sm" disabled={pending}>
-              {pending ? "Saving…" : isEdit ? "Save changes" : "Add project"}
-            </Button>
+            {saved ? (
+              <Button type="button" size="sm" onClick={onClose}>
+                Done
+              </Button>
+            ) : (
+              <>
+                <Button type="button" variant="ghost" size="sm" onClick={onClose}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={pending}>
+                  {pending ? "Saving…" : isEdit ? "Save changes" : "Add project"}
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>
@@ -166,9 +207,9 @@ export function ProjectDialog({ onClose, mode, project }) {
   );
 }
 
-function DbConnectionSection({ form, isEdit, projectId, configured, clearDbConn }) {
+function DbConnectionSection({ form, isEdit, projectId, configured, checkError, clearDbConn }) {
   const test = useTestDbConnection();
-  // Tri-state: null = no probe yet, true = OK, string = error message
+  // null = no probe yet; { ok: true, ignored } on success; { ok: false, error } on failure
   const [probeResult, setProbeResult] = React.useState(null);
 
   async function handleTest(value) {
@@ -176,10 +217,11 @@ function DbConnectionSection({ form, isEdit, projectId, configured, clearDbConn 
     if (!trimmed) return;
     setProbeResult(null);
     try {
-      await test.mutateAsync({ connectionString: trimmed });
-      setProbeResult(true);
+      const ignored = await test.mutateAsync({ connectionString: trimmed });
+      setProbeResult({ ok: true, ignored: ignored || [] });
     } catch (err) {
-      setProbeResult(typeof err === "string" ? err : err?.message || "Connection failed");
+      const message = typeof err === "string" ? err : err?.message || "Connection failed";
+      setProbeResult({ ok: false, error: message });
     }
   }
 
@@ -191,19 +233,45 @@ function DbConnectionSection({ form, isEdit, projectId, configured, clearDbConn 
 
   return (
     <div className="flex flex-col gap-1.5 border-t pt-3 mt-1">
-      <div className="flex items-center justify-between">
-        <Label htmlFor="db_connection_string">
+      <div className="flex items-center gap-2">
+        <Database className="h-3.5 w-3.5 text-muted-foreground" />
+        <Label htmlFor="db_connection_string" className="text-sm">
           Database connection <span className="text-muted-foreground font-normal">(optional)</span>
         </Label>
-        {isEdit && configured && (
-          <Badge variant="secondary" className="text-[10px] font-normal">
-            Configured
-          </Badge>
-        )}
       </div>
+
+      {isEdit && configured && (
+        <div className="flex items-center justify-between gap-2 rounded border border-emerald-500/30 bg-emerald-500/5 px-2.5 py-1.5">
+          <span className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+            <CheckCircle2 className="h-3 w-3" />
+            Connection saved for this project
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-6 text-xs"
+            onClick={handleClear}
+            disabled={clearDbConn.isPending}
+          >
+            Remove
+          </Button>
+        </div>
+      )}
+
+      {isEdit && checkError && (
+        <div className="rounded border border-amber-500/40 bg-amber-500/5 px-2.5 py-1.5 text-xs text-amber-300 flex items-start gap-1.5">
+          <XCircle className="h-3 w-3 mt-0.5 shrink-0" />
+          <span className="break-words">
+            Couldn't check if a connection is saved: {checkError}
+          </span>
+        </div>
+      )}
+
       <p className="text-xs text-muted-foreground">
         Used only to read <code className="text-[10px]">__EFMigrationsHistory</code>. Stored in your OS keyring, never in the config file.
       </p>
+
       <form.Field name="db_connection_string">
         {(field) => (
           <>
@@ -217,37 +285,23 @@ function DbConnectionSection({ form, isEdit, projectId, configured, clearDbConn 
               }}
               placeholder={
                 isEdit && configured
-                  ? "Leave blank to keep existing connection"
+                  ? "Paste a new connection string to replace…"
                   : "Server=…;Database=…;User Id=…;Password=…"
               }
               className="font-mono text-xs"
             />
             <div className="flex items-center justify-between gap-2 min-h-[24px]">
-              <ProbeStatus state={probeResult} pending={test.isPending} />
-              <div className="flex items-center gap-2">
-                {isEdit && configured && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={handleClear}
-                    disabled={clearDbConn.isPending}
-                  >
-                    Clear
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => handleTest(field.state.value)}
-                  disabled={!field.state.value.trim() || test.isPending}
-                >
-                  Test connection
-                </Button>
-              </div>
+              <ProbeStatus result={probeResult} pending={test.isPending} />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => handleTest(field.state.value)}
+                disabled={!field.state.value.trim() || test.isPending}
+              >
+                Test connection
+              </Button>
             </div>
           </>
         )}
@@ -256,7 +310,7 @@ function DbConnectionSection({ form, isEdit, projectId, configured, clearDbConn 
   );
 }
 
-function ProbeStatus({ state, pending }) {
+function ProbeStatus({ result, pending }) {
   if (pending) {
     return (
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -265,24 +319,85 @@ function ProbeStatus({ state, pending }) {
       </span>
     );
   }
-  if (state === true) {
+  if (!result) return <span />;
+  if (result.ok) {
     return (
       <span className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
         <CheckCircle2 className="h-3 w-3" />
         Connection works
+        {result.ignored.length > 0 && (
+          <span
+            className="ml-1 text-muted-foreground"
+            title={`These keys aren't recognized by the SQL Server driver and will be stripped on save: ${result.ignored.join(", ")}`}
+          >
+            (ignored: {result.ignored.join(", ")})
+          </span>
+        )}
       </span>
     );
   }
-  if (typeof state === "string") {
+  return (
+    <span
+      className="flex items-center gap-1 text-xs text-destructive truncate"
+      title={result.error}
+    >
+      <XCircle className="h-3 w-3 flex-shrink-0" />
+      <span className="truncate">{result.error}</span>
+    </span>
+  );
+}
+
+function SavePostStatus({ status }) {
+  const { projectError, dbStatus, ignored_keys } = status;
+
+  if (projectError) {
     return (
-      <span
-        className="flex items-center gap-1 text-xs text-destructive truncate"
-        title={state}
-      >
-        <XCircle className="h-3 w-3 flex-shrink-0" />
-        <span className="truncate">{state}</span>
-      </span>
+      <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs flex items-start gap-2">
+        <XCircle className="h-3.5 w-3.5 text-destructive mt-0.5" />
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-destructive font-medium">Project save failed</span>
+          <span className="text-muted-foreground break-words">{projectError}</span>
+        </div>
+      </div>
     );
   }
-  return <span />;
+
+  if (dbStatus === "saved") {
+    return (
+      <div className="rounded border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs flex items-start gap-2">
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400 mt-0.5" />
+        <div className="flex flex-col gap-0.5">
+          <span className="text-emerald-700 dark:text-emerald-400 font-medium">
+            Project saved · Database connection stored
+          </span>
+          {ignored_keys.length > 0 && (
+            <span className="text-muted-foreground">
+              Ignored unsupported keys: <code className="text-[10px]">{ignored_keys.join(", ")}</code>
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (typeof dbStatus === "string" && dbStatus !== "saved") {
+    return (
+      <div className="rounded border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs flex items-start gap-2">
+        <XCircle className="h-3.5 w-3.5 text-destructive mt-0.5" />
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <span className="text-destructive font-medium">
+            Project saved, but the database connection couldn't be stored
+          </span>
+          <span className="text-muted-foreground break-words">{dbStatus}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs flex items-center gap-2">
+      <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+      <span className="text-emerald-700 dark:text-emerald-400 font-medium">Project saved</span>
+    </div>
+  );
 }

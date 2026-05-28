@@ -13,6 +13,80 @@ pub struct DbHistoryRow {
     pub product_version: String,
 }
 
+// ─── Connection-string normalization ────────────────────────────────
+//
+// tiberius's `Config::from_ado_string` understands a subset of the keys that
+// Microsoft.Data.SqlClient accepts. Pasting a connection string from
+// `appsettings.json` will commonly include keys tiberius rejects outright
+// (`Authentication`, `MultipleActiveResultSets`, `ConnectRetryCount`, etc.) —
+// which causes the whole string to fail to parse, even though the keys we
+// actually need are present.
+//
+// Stripping unsupported keys before tiberius sees the string makes the common
+// copy-paste case Just Work. We return the list of stripped keys so the
+// frontend can surface them as an info hint.
+
+/// Keys tiberius's ADO parser recognizes. Case-insensitive match.
+const SUPPORTED_KEYS: &[&str] = &[
+    "server",
+    "data source",
+    "address",
+    "addr",
+    "database",
+    "initial catalog",
+    "user id",
+    "uid",
+    "user",
+    "password",
+    "pwd",
+    "integrated security",
+    "integratedsecurity",
+    "trustservercertificate",
+    "encrypt",
+    "application name",
+    "applicationname",
+    "instance name",
+    "instancename",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NormalizedConnection {
+    pub connection_string: String,
+    pub ignored_keys: Vec<String>,
+}
+
+pub fn normalize_connection_string(raw: &str) -> NormalizedConnection {
+    let mut kept: Vec<String> = Vec::new();
+    let mut ignored: Vec<String> = Vec::new();
+
+    for part in raw.split(';') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.split_once('=') {
+            Some((key, _val)) => {
+                let key_lower = key.trim().to_ascii_lowercase();
+                if SUPPORTED_KEYS.contains(&key_lower.as_str()) {
+                    kept.push(trimmed.to_string());
+                } else {
+                    ignored.push(key.trim().to_string());
+                }
+            }
+            None => {
+                // A bare token without `=` — pass through unchanged so we don't
+                // accidentally swallow something the user typed intentionally.
+                kept.push(trimmed.to_string());
+            }
+        }
+    }
+
+    NormalizedConnection {
+        connection_string: kept.join(";"),
+        ignored_keys: ignored,
+    }
+}
+
 // ─── Keyring storage ────────────────────────────────────────────────
 
 fn keyring_entry(project_id: &str) -> Result<keyring::Entry, String> {
@@ -20,11 +94,16 @@ fn keyring_entry(project_id: &str) -> Result<keyring::Entry, String> {
         .map_err(|e| format!("Failed to access OS keyring: {}", e))
 }
 
-pub fn store_connection_string(project_id: &str, conn: &str) -> Result<(), String> {
+/// Stores the *normalized* form of the connection string so subsequent reads
+/// never have to deal with unsupported keys. Returns the list of keys that
+/// were stripped so the frontend can hint about them.
+pub fn store_connection_string(project_id: &str, conn: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_connection_string(conn);
     let entry = keyring_entry(project_id)?;
     entry
-        .set_password(conn)
-        .map_err(|e| format!("Failed to store connection string in keyring: {}", e))
+        .set_password(&normalized.connection_string)
+        .map_err(|e| format!("Failed to store connection string in keyring: {}", e))?;
+    Ok(normalized.ignored_keys)
 }
 
 pub fn load_connection_string(project_id: &str) -> Result<Option<String>, String> {
@@ -48,7 +127,11 @@ pub fn clear_connection_string(project_id: &str) -> Result<(), String> {
 // ─── SQL Server access ──────────────────────────────────────────────
 
 async fn connect(conn_string: &str) -> Result<Client<Compat<TcpStream>>, String> {
-    let config = Config::from_ado_string(conn_string)
+    // Normalize defensively: connections stored before the normalizer landed,
+    // or strings passed straight through from `test_db_connection`, may still
+    // include unsupported keys.
+    let normalized = normalize_connection_string(conn_string);
+    let config = Config::from_ado_string(&normalized.connection_string)
         .map_err(|e| format!("Invalid SQL Server connection string: {}", e))?;
 
     let tcp = TcpStream::connect(config.get_addr())
@@ -62,13 +145,14 @@ async fn connect(conn_string: &str) -> Result<Client<Compat<TcpStream>>, String>
         .map_err(|e| format!("SQL Server handshake failed: {}", e))
 }
 
-async fn test_connection(conn_string: &str) -> Result<(), String> {
-    let mut client = connect(conn_string).await?;
+async fn test_connection(conn_string: &str) -> Result<Vec<String>, String> {
+    let normalized = normalize_connection_string(conn_string);
+    let mut client = connect(&normalized.connection_string).await?;
     client
         .simple_query("SELECT 1")
         .await
         .map_err(|e| format!("Probe query failed: {}", e))?;
-    Ok(())
+    Ok(normalized.ignored_keys)
 }
 
 /// Returns rows from `__EFMigrationsHistory`. If the table doesn't exist (e.g.
@@ -130,7 +214,7 @@ async fn fetch_history(conn_string: &str) -> Result<Vec<DbHistoryRow>, String> {
 pub async fn set_db_connection(
     project_id: String,
     connection_string: String,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || store_connection_string(&project_id, &connection_string))
         .await
         .map_err(|e| e.to_string())?
@@ -151,10 +235,10 @@ pub async fn has_db_connection(project_id: String) -> Result<bool, String> {
     Ok(result.is_some())
 }
 
-/// Probe a connection string without saving it. Frontend uses this for the
-/// "Test connection" button in project settings.
+/// Probe a connection string without saving it. Returns the list of keys that
+/// were stripped during normalization so the UI can hint about them.
 #[tauri::command]
-pub async fn test_db_connection(connection_string: String) -> Result<(), String> {
+pub async fn test_db_connection(connection_string: String) -> Result<Vec<String>, String> {
     tokio::time::timeout(QUERY_TIMEOUT, test_connection(&connection_string))
         .await
         .map_err(|_| format!("Connection attempt timed out after {}s", QUERY_TIMEOUT.as_secs()))?
@@ -170,4 +254,69 @@ pub async fn fetch_db_history(project_id: String) -> Result<Vec<DbHistoryRow>, S
     tokio::time::timeout(QUERY_TIMEOUT, fetch_history(&conn))
         .await
         .map_err(|_| format!("Query timed out after {}s", QUERY_TIMEOUT.as_secs()))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_passes_through_supported_keys_unchanged() {
+        let raw = "Server=localhost,1433;Database=foo;User Id=sa;Password=pw;TrustServerCertificate=True";
+        let n = normalize_connection_string(raw);
+        assert_eq!(n.connection_string, raw);
+        assert!(n.ignored_keys.is_empty());
+    }
+
+    #[test]
+    fn normalize_strips_unsupported_authentication_keyword() {
+        let raw = r#"Data Source=localhost,1433;Initial Catalog=cmms;User ID=cmms;Password=cmms;TrustServerCertificate=True;Authentication="Sql Password""#;
+        let n = normalize_connection_string(raw);
+        assert!(!n.connection_string.contains("Authentication"));
+        assert!(n.connection_string.contains("Data Source=localhost,1433"));
+        assert!(n.connection_string.contains("Initial Catalog=cmms"));
+        assert_eq!(n.ignored_keys, vec!["Authentication".to_string()]);
+    }
+
+    #[test]
+    fn normalize_strips_multiple_unsupported_keys() {
+        let raw = "Server=db;Database=x;User Id=u;Password=p;MultipleActiveResultSets=True;ConnectRetryCount=3;Pooling=true";
+        let n = normalize_connection_string(raw);
+        assert_eq!(
+            n.ignored_keys,
+            vec![
+                "MultipleActiveResultSets".to_string(),
+                "ConnectRetryCount".to_string(),
+                "Pooling".to_string(),
+            ]
+        );
+        assert!(!n.connection_string.contains("MultipleActiveResultSets"));
+        assert!(!n.connection_string.contains("ConnectRetryCount"));
+        assert!(!n.connection_string.contains("Pooling"));
+    }
+
+    #[test]
+    fn normalize_is_case_insensitive() {
+        let raw = "SERVER=x;DATABASE=y;USER ID=u;PASSWORD=p";
+        let n = normalize_connection_string(raw);
+        assert!(n.ignored_keys.is_empty());
+        assert_eq!(n.connection_string, raw);
+    }
+
+    #[test]
+    fn normalize_handles_empty_segments_and_whitespace() {
+        let raw = "  Server = x ; ; Database=y ;;User Id=u; Password=p ; ";
+        let n = normalize_connection_string(raw);
+        // Whitespace is preserved inside kept segments; empty segments are dropped.
+        assert!(n.connection_string.contains("Server = x"));
+        assert!(n.connection_string.contains("Database=y"));
+        assert!(!n.connection_string.contains(";;"));
+    }
+
+    #[test]
+    fn normalize_returns_empty_string_for_empty_input() {
+        let n = normalize_connection_string("");
+        assert_eq!(n.connection_string, "");
+        assert!(n.ignored_keys.is_empty());
+    }
 }
