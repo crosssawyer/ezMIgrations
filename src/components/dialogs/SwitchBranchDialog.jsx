@@ -94,20 +94,24 @@ export function SwitchBranchDialog({ onClose }) {
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="!flex !flex-col !w-[min(28rem,calc(100vw-2rem))] !max-w-none !max-h-[calc(100vh-2rem)] p-0 gap-0 overflow-hidden">
-        <DialogHeader className="shrink-0 px-5 pt-5 pb-2">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex flex-col gap-1.5 min-w-0">
-              <DialogTitle>Switch branch</DialogTitle>
-              <DialogDescription className="text-sm leading-relaxed text-foreground/80">
-                Branch-only migrations roll back first, then the working tree switches
-                and the database updates to latest.
-              </DialogDescription>
-            </div>
+        <DialogHeader className="shrink-0 px-5 pt-5 pb-2 pr-12">
+          <DialogTitle>Switch branch</DialogTitle>
+          <DialogDescription className="text-sm leading-relaxed text-foreground/80">
+            Branch-only migrations roll back first, then the working tree switches
+            and the database updates to latest.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={onSubmit} className="flex flex-col min-h-0 flex-1">
+          <div className="shrink-0 flex items-center gap-2 px-5 pb-3 min-w-0">
+            <BranchChip label={currentBranch || "current"} tone="muted" />
+            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <BranchChip label={selected || "select branch"} tone="primary" />
             <Button
               type="button"
               variant="outline"
               size="sm"
-              className="shrink-0 gap-1.5"
+              className="ml-auto shrink-0 gap-1.5"
               onClick={() => fetchRemote.mutate()}
               disabled={fetchRemote.isPending || switchBranch.isPending}
               title="Fetch the latest branches from the remote"
@@ -117,14 +121,6 @@ export function SwitchBranchDialog({ onClose }) {
               />
               {fetchRemote.isPending ? "Fetching…" : "Fetch"}
             </Button>
-          </div>
-        </DialogHeader>
-
-        <form onSubmit={onSubmit} className="flex flex-col min-h-0 flex-1">
-          <div className="shrink-0 flex items-center gap-2 px-5 pb-3 min-w-0">
-            <BranchChip label={currentBranch || "current"} tone="muted" />
-            <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <BranchChip label={selected || "select branch"} tone="primary" />
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col border-y border-border bg-popover">
