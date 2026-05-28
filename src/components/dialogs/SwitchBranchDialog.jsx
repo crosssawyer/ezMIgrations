@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowRight, GitBranch, Check, Cloud } from "lucide-react";
+import { ArrowRight, GitBranch, Check, Cloud, RefreshCw } from "lucide-react";
 
 import {
   Dialog,
@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useBranches, useCurrentBranch } from "@/lib/queries";
-import { useSwitchBranch } from "@/lib/mutations";
+import { useSwitchBranch, useFetchRemote } from "@/lib/mutations";
 
 function BranchChip({ label, tone = "muted" }) {
   return (
@@ -70,6 +70,7 @@ export function SwitchBranchDialog({ onClose }) {
   const { data: branches = [], isLoading } = useBranches();
   const { data: currentBranch = "" } = useCurrentBranch();
   const switchBranch = useSwitchBranch();
+  const fetchRemote = useFetchRemote();
   const [selected, setSelected] = React.useState("");
 
   const locals = React.useMemo(
@@ -94,11 +95,29 @@ export function SwitchBranchDialog({ onClose }) {
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="!flex !flex-col !w-[min(28rem,calc(100vw-2rem))] !max-w-none !max-h-[calc(100vh-2rem)] p-0 gap-0 overflow-hidden">
         <DialogHeader className="shrink-0 px-5 pt-5 pb-2">
-          <DialogTitle>Switch branch</DialogTitle>
-          <DialogDescription className="text-sm leading-relaxed text-foreground/80">
-            Branch-only migrations roll back first, then the working tree switches
-            and the database updates to latest.
-          </DialogDescription>
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex flex-col gap-1.5 min-w-0">
+              <DialogTitle>Switch branch</DialogTitle>
+              <DialogDescription className="text-sm leading-relaxed text-foreground/80">
+                Branch-only migrations roll back first, then the working tree switches
+                and the database updates to latest.
+              </DialogDescription>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 gap-1.5"
+              onClick={() => fetchRemote.mutate()}
+              disabled={fetchRemote.isPending}
+              title="Fetch the latest branches from the remote"
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", fetchRemote.isPending && "animate-spin")}
+              />
+              {fetchRemote.isPending ? "Fetching…" : "Fetch"}
+            </Button>
+          </div>
         </DialogHeader>
 
         <form onSubmit={onSubmit} className="flex flex-col min-h-0 flex-1">

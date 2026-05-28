@@ -1231,6 +1231,21 @@ pub async fn list_git_branches(state: State<'_, AppState>) -> Result<Vec<BranchI
     .map_err(|e| e.to_string())?
 }
 
+#[tauri::command]
+pub async fn fetch_remote(state: State<'_, AppState>) -> Result<(), String> {
+    let project_path = {
+        let guard = state.config.lock().unwrap();
+        guard
+            .as_ref()
+            .ok_or("No project configured")?
+            .project_path
+            .clone()
+    };
+
+    tokio::task::spawn_blocking(move || GitService::fetch(&project_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
 #[tauri::command]
 pub async fn switch_branch_with_migrations(

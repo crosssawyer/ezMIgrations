@@ -242,6 +242,19 @@ export function useSetStable() {
   });
 }
 
+export function useFetchRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => invoke("fetch_remote"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.branches });
+      qc.invalidateQueries({ queryKey: queryKeys.currentBranch });
+      toast.success("Fetched latest from remote");
+    },
+    onError: errToast("Failed to fetch from remote"),
+  });
+}
+
 export function useSwitchBranch() {
   const qc = useQueryClient();
   const handleEfError = useEfErrorHandler();

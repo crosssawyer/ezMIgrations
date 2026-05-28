@@ -73,6 +73,16 @@ describe("SwitchBranchDialog", () => {
     expect(screen.getByText("Remote")).toBeInTheDocument();
   });
 
+  it("invokes fetch_remote when the Fetch button is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    const fetchBtn = screen.getByRole("button", { name: /fetch/i });
+    await user.click(fetchBtn);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("fetch_remote");
+    });
+  });
+
   it("invokes switch_branch_with_migrations with the selected branch on submit", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
