@@ -102,7 +102,7 @@ export function SwitchBranchDialog({ onClose }) {
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={onSubmit} className="flex flex-col min-h-0 flex-1">
+        <form onSubmit={onSubmit} className="flex flex-col min-h-0">
           <div className="shrink-0 flex items-center gap-2 px-5 pb-3 min-w-0">
             <BranchChip label={currentBranch || "current"} tone="muted" />
             <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
@@ -123,10 +123,10 @@ export function SwitchBranchDialog({ onClose }) {
             </Button>
           </div>
 
-          <div className="flex-1 min-h-0 flex flex-col border-y border-border bg-popover">
-            <Command className="flex-1 min-h-0 rounded-none border-0 bg-transparent">
+          <div className="min-h-0 flex flex-col border-y border-border bg-popover">
+            <Command className="min-h-0 rounded-none border-0 bg-transparent">
               <CommandInput placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
-              <CommandList className="flex-1 min-h-0 max-h-none">
+              <CommandList className="max-h-[clamp(200px,42vh,360px)]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
                 {locals.length > 0 && (
                   <CommandGroup heading="Local">
