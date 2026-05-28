@@ -1,66 +1,18 @@
-use crate::dotnet::DotnetEf;
 use crate::git::GitService;
-use crate::parser::{KeepStrategy, MigrationParser, SqlStatement};
+use crate::ops::{self, BranchInfo, BranchSwitchResult, MigrationSqlInfo, PhaseSink, ProjectInfo};
+use crate::parser::MigrationParser;
 use crate::state::{AppConfig, AppState, Migration, Preferences, ProjectConfig, SavedProject};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use serde::Serialize;
+use std::path::Path;
 use std::sync::mpsc::channel;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
-// ─── Helpers ────────────────────────────────────────────────────────
+// ─── Tauri frontend adapters ────────────────────────────────────────
 
-/// Detect common EF Core misconfiguration and return a friendlier message.
-fn enrich_ef_error(raw: &str) -> String {
-    if raw.contains("doesn't match your migrations assembly") {
-        return format!(
-            "Project mismatch: your \"Migrations Project\" may be pointing to the startup/API \
-             project instead of the project that contains your DbContext and migrations. \
-             Check your project configuration and swap them if needed.\n\n{}",
-            raw
-        );
-    }
-    raw.to_string()
-}
-
-fn migration_name_from_path(path: &Path) -> Option<String> {
-    let file_name = path.file_name()?.to_str()?;
-    if !file_name.ends_with(".cs")
-        || file_name.ends_with(".Designer.cs")
-        || file_name.contains("ModelSnapshot")
-    {
-        return None;
-    }
-
-    path.file_stem()
-        .and_then(|n| n.to_str())
-        .map(ToString::to_string)
-}
-
-fn migration_name_from_git_path(path: &str) -> Option<String> {
-    migration_name_from_path(Path::new(path))
-}
-
-fn migration_names_from_files(files: Vec<PathBuf>) -> Vec<String> {
-    files
-        .iter()
-        .filter_map(|path| migration_name_from_path(path))
-        .collect()
-}
-
-fn latest_common_migration(current: &[String], target: &[String]) -> Option<String> {
-    let target_names: HashSet<&str> = target.iter().map(String::as_str).collect();
-    current
-        .iter()
-        .rev()
-        .find(|name| target_names.contains(name.as_str()))
-        .cloned()
-}
-
+/// `operation-phase` event payload consumed by the desktop frontend.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct OperationPhaseEvent {
@@ -69,98 +21,55 @@ struct OperationPhaseEvent {
     message: String,
 }
 
-/// Sender half of a phased operation. Cheap to clone; safe to move into
-/// `spawn_blocking` closures. Emits `operation-phase` events and exposes a
-/// cancellation check that the operation polls between steps.
+/// [`PhaseSink`] that forwards progress to the Tauri window as
+/// `operation-phase` events tagged with the originating operation name.
 #[derive(Clone)]
-struct PhaseEmitter {
+struct TauriPhaseSink {
     app: AppHandle,
     operation: &'static str,
-    cancel: Arc<AtomicBool>,
 }
 
-impl PhaseEmitter {
-    fn emit(&self, phase: &'static str, message: impl Into<String>) {
+impl TauriPhaseSink {
+    fn new(app: &AppHandle, operation: &'static str) -> Self {
+        Self {
+            app: app.clone(),
+            operation,
+        }
+    }
+}
+
+impl PhaseSink for TauriPhaseSink {
+    fn emit(&self, phase: &'static str, message: String) {
         let _ = self.app.emit(
             "operation-phase",
             OperationPhaseEvent {
                 operation: self.operation,
                 phase,
-                message: message.into(),
+                message,
             },
         );
     }
+}
 
-    fn check_canceled(&self) -> Result<(), String> {
-        if self.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-            Err("Canceled by user.".to_string())
-        } else {
-            Ok(())
-        }
+/// [`ConfigStore`](crate::ops::ConfigStore) backed by the Tauri app-data dir,
+/// so saved-project mutations persist to `app_config.json`.
+pub struct TauriConfigStore {
+    app: AppHandle,
+}
+
+impl TauriConfigStore {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
     }
 }
 
-/// RAII guard for a multi-step backend operation. Holds a `PhaseEmitter` for
-/// emitting progress and clears the shared cancel flag on drop so the next
-/// operation starts clean.
-struct PhasedOp {
-    emitter: PhaseEmitter,
-}
-
-impl PhasedOp {
-    fn new(app: &AppHandle, state: &AppState, operation: &'static str) -> Self {
-        state
-            .op_cancel
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        Self {
-            emitter: PhaseEmitter {
-                app: app.clone(),
-                operation,
-                cancel: state.op_cancel.clone(),
-            },
-        }
-    }
-
-    fn emitter(&self) -> PhaseEmitter {
-        self.emitter.clone()
+impl crate::ops::ConfigStore for TauriConfigStore {
+    fn save(&self, config: &AppConfig) -> Result<(), String> {
+        save_app_config(&self.app, config)
     }
 }
 
-impl Drop for PhasedOp {
-    fn drop(&mut self) {
-        self.emitter
-            .cancel
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-fn path_relative_to_repo(repo_root: &str, path: &Path) -> Result<String, String> {
-    let root = std::fs::canonicalize(repo_root)
-        .map_err(|e| format!("Failed to resolve git root '{}': {}", repo_root, e))?;
-    let path = std::fs::canonicalize(path)
-        .map_err(|e| format!("Failed to resolve path '{}': {}", path.display(), e))?;
-    let relative = path.strip_prefix(&root).map_err(|_| {
-        format!(
-            "Migrations directory '{}' is not inside git repository '{}'",
-            path.display(),
-            root.display()
-        )
-    })?;
-
-    Ok(relative.to_string_lossy().replace('\\', "/"))
-}
-
-// ─── Project Commands ───────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize)]
-pub struct ProjectInfo {
-    pub id: Option<String>,
-    pub path: String,
-    pub db_context: String,
-    pub startup_project: String,
-    pub branch: String,
-    pub stable_migration: Option<String>,
-}
+// ─── Helpers ────────────────────────────────────────────────────────
 
 fn config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path()
@@ -176,14 +85,6 @@ fn app_config_file_path(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|d| d.join("app_config.json"))
 }
 
-fn generate_id() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .to_string()
-}
-
 fn save_app_config(app: &AppHandle, app_config: &AppConfig) -> Result<(), String> {
     let config_path = app_config_file_path(app).ok_or("Could not resolve app data dir")?;
     if let Some(parent) = config_path.parent() {
@@ -192,21 +93,6 @@ fn save_app_config(app: &AppHandle, app_config: &AppConfig) -> Result<(), String
     let json = serde_json::to_string_pretty(app_config).map_err(|e| e.to_string())?;
     std::fs::write(&config_path, json).map_err(|e| e.to_string())?;
     Ok(())
-}
-
-fn derive_project_name(project_path: &str) -> String {
-    Path::new(project_path)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "My Project".to_string())
-}
-
-fn ensure_path_exists(path: &str) -> Result<(), String> {
-    if Path::new(path).exists() {
-        Ok(())
-    } else {
-        Err(format!("Path does not exist: {}", path))
-    }
 }
 
 pub(crate) fn reset_watchers(state: &AppState) {
@@ -251,10 +137,10 @@ fn migrate_legacy_config(app: &AppHandle, state: &AppState) -> Option<AppConfig>
         return None;
     }
 
-    let id = generate_id();
+    let id = ops::generate_id();
     let saved = SavedProject {
         id: id.clone(),
-        name: derive_project_name(&legacy.project_path),
+        name: ops::derive_project_name(&legacy.project_path),
         project_path: legacy.project_path.clone(),
         db_context: legacy.db_context.clone(),
         startup_project: legacy.startup_project.clone(),
@@ -283,62 +169,10 @@ pub async fn set_project(
     db_context: String,
     startup_project: String,
 ) -> Result<ProjectInfo, String> {
-    ensure_path_exists(&project_path)?;
-
-    let pp = project_path.clone();
-    let branch = tokio::task::spawn_blocking(move || {
-        GitService::get_current_branch(&pp).unwrap_or_default()
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let config = ProjectConfig {
-        project_path: project_path.clone(),
-        db_context: db_context.clone(),
-        startup_project: startup_project.clone(),
-    };
-
-    // Upsert into app_config
-    let (project_id, stable_migration) = {
-        let mut ac = state.app_config.lock().unwrap();
-        // Find existing by path or create new
-        let (id, stable) = if let Some(existing) = ac
-            .projects
-            .iter_mut()
-            .find(|p| p.project_path == project_path)
-        {
-            existing.db_context = db_context.clone();
-            existing.startup_project = startup_project.clone();
-            (existing.id.clone(), existing.stable_migration.clone())
-        } else {
-            let id = generate_id();
-            ac.projects.push(SavedProject {
-                id: id.clone(),
-                name: derive_project_name(&project_path),
-                project_path: project_path.clone(),
-                db_context: db_context.clone(),
-                startup_project: startup_project.clone(),
-                stable_migration: None,
-            });
-            (id, None)
-        };
-        ac.active_project_id = Some(id.clone());
-        save_app_config(&app, &ac)?;
-        (id, stable)
-    };
-
-    *state.config.lock().unwrap() = Some(config.clone());
-    *state.current_branch.lock().unwrap() = branch.clone();
+    let store = TauriConfigStore::new(app.clone());
+    let info = ops::set_project(&state, &store, project_path, db_context, startup_project).await?;
     reset_watchers(&state);
-
-    Ok(ProjectInfo {
-        id: Some(project_id),
-        path: config.project_path,
-        db_context: config.db_context,
-        startup_project: config.startup_project,
-        branch,
-        stable_migration,
-    })
+    Ok(info)
 }
 
 #[tauri::command]
@@ -528,25 +362,8 @@ pub async fn save_project(
     db_context: String,
     startup_project: String,
 ) -> Result<SavedProject, String> {
-    ensure_path_exists(&path)?;
-
-    let id = generate_id();
-    let saved = SavedProject {
-        id: id.clone(),
-        name,
-        project_path: path,
-        db_context,
-        startup_project,
-        stable_migration: None,
-    };
-
-    {
-        let mut ac = state.app_config.lock().unwrap();
-        ac.projects.push(saved.clone());
-        save_app_config(&app, &ac)?;
-    }
-
-    Ok(saved)
+    let store = TauriConfigStore::new(app.clone());
+    ops::save_project(&state, &store, name, path, db_context, startup_project)
 }
 
 #[tauri::command]
@@ -559,33 +376,8 @@ pub async fn update_saved_project(
     db_context: String,
     startup_project: String,
 ) -> Result<SavedProject, String> {
-    ensure_path_exists(&path)?;
-
-    let mut ac = state.app_config.lock().unwrap();
-    let proj = ac
-        .projects
-        .iter_mut()
-        .find(|p| p.id == id)
-        .ok_or_else(|| format!("Project not found: {}", id))?;
-
-    proj.name = name;
-    proj.project_path = path;
-    proj.db_context = db_context;
-    proj.startup_project = startup_project;
-
-    let updated = proj.clone();
-    save_app_config(&app, &ac)?;
-
-    // If this is the active project, update the in-memory config too
-    if ac.active_project_id.as_ref() == Some(&id) {
-        *state.config.lock().unwrap() = Some(ProjectConfig {
-            project_path: updated.project_path.clone(),
-            db_context: updated.db_context.clone(),
-            startup_project: updated.startup_project.clone(),
-        });
-    }
-
-    Ok(updated)
+    let store = TauriConfigStore::new(app.clone());
+    ops::update_saved_project(&state, &store, id, name, path, db_context, startup_project)
 }
 
 #[tauri::command]
@@ -594,18 +386,11 @@ pub async fn delete_saved_project(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<(), String> {
-    let mut ac = state.app_config.lock().unwrap();
-    ac.projects.retain(|p| p.id != id);
-
-    if ac.active_project_id.as_ref() == Some(&id) {
-        ac.active_project_id = None;
-        *state.config.lock().unwrap() = None;
-        *state.current_branch.lock().unwrap() = String::new();
-        state.migrations.lock().unwrap().clear();
+    let store = TauriConfigStore::new(app.clone());
+    if ops::delete_saved_project(&state, &store, id)? {
+        // The active project was removed — tear down its GUI watchers.
         reset_watchers(&state);
     }
-
-    save_app_config(&app, &ac)?;
     Ok(())
 }
 
@@ -615,48 +400,10 @@ pub async fn switch_project(
     state: State<'_, Arc<AppState>>,
     id: String,
 ) -> Result<ProjectInfo, String> {
-    let project = {
-        let ac = state.app_config.lock().unwrap();
-        ac.projects
-            .iter()
-            .find(|p| p.id == id)
-            .ok_or_else(|| format!("Project not found: {}", id))?
-            .clone()
-    };
-
-    ensure_path_exists(&project.project_path)?;
-
-    {
-        let mut ac = state.app_config.lock().unwrap();
-        ac.active_project_id = Some(id.clone());
-        save_app_config(&app, &ac)?;
-    }
-
-    let config = ProjectConfig {
-        project_path: project.project_path.clone(),
-        db_context: project.db_context.clone(),
-        startup_project: project.startup_project.clone(),
-    };
-
-    let pp = config.project_path.clone();
-    let branch = tokio::task::spawn_blocking(move || {
-        GitService::get_current_branch(&pp).unwrap_or_default()
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-
-    *state.config.lock().unwrap() = Some(config);
-    *state.current_branch.lock().unwrap() = branch.clone();
+    let store = TauriConfigStore::new(app.clone());
+    let info = ops::switch_project(&state, &store, id).await?;
     reset_watchers(&state);
-
-    Ok(ProjectInfo {
-        id: Some(project.id),
-        path: project.project_path,
-        db_context: project.db_context,
-        startup_project: project.startup_project,
-        branch,
-        stable_migration: project.stable_migration,
-    })
+    Ok(info)
 }
 
 #[tauri::command]
@@ -665,16 +412,8 @@ pub async fn set_stable_migration(
     state: State<'_, Arc<AppState>>,
     migration_name: Option<String>,
 ) -> Result<(), String> {
-    let mut ac = state.app_config.lock().unwrap();
-    let active_id = ac.active_project_id.clone().ok_or("No active project")?;
-    let proj = ac
-        .projects
-        .iter_mut()
-        .find(|p| p.id == active_id)
-        .ok_or("Active project not found")?;
-    proj.stable_migration = migration_name;
-    save_app_config(&app, &ac)?;
-    Ok(())
+    let store = TauriConfigStore::new(app.clone());
+    ops::set_stable_migration(&state, &store, migration_name)
 }
 
 // ─── Preferences Commands ───────────────────────────────────────────
@@ -691,74 +430,15 @@ pub async fn set_preferences(
     state: State<'_, Arc<AppState>>,
     preferences: Preferences,
 ) -> Result<(), String> {
-    let mut ac = state.app_config.lock().unwrap();
-    ac.preferences = preferences;
-    save_app_config(&app, &ac)?;
-    Ok(())
+    let store = TauriConfigStore::new(app.clone());
+    ops::set_preferences(&state, &store, preferences)
 }
 
 // ─── Migration Commands ─────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn list_migrations(state: State<'_, Arc<AppState>>) -> Result<Vec<Migration>, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    let migrations = tokio::task::spawn_blocking(move || {
-        let ef_migrations = DotnetEf::list_migrations(
-            &config.project_path,
-            &config.db_context,
-            &config.startup_project,
-        )
-        .map_err(|e| enrich_ef_error(&e))?;
-
-        // Cache all migration files once instead of scanning the directory per migration
-        let all_files =
-            MigrationParser::find_migration_files(&config.project_path).unwrap_or_default();
-
-        let mut migrations: Vec<Migration> = Vec::new();
-
-        for (name, applied) in &ef_migrations {
-            let file_path = all_files.iter().find(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.contains(name) || name.contains(s))
-                    .unwrap_or(false)
-            });
-
-            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(fp) = file_path {
-                match MigrationParser::parse_file(fp) {
-                    Ok(parsed) => (
-                        parsed.has_custom_sql,
-                        parsed.sql_strings_up(),
-                        parsed.sql_strings_down(),
-                    ),
-                    Err(_) => (false, Vec::new(), Vec::new()),
-                }
-            } else {
-                (false, Vec::new(), Vec::new())
-            };
-
-            migrations.push(Migration {
-                id: name.clone(),
-                name: name.clone(),
-                applied: *applied,
-                has_custom_sql,
-                custom_sql_up,
-                custom_sql_down,
-                file_path: file_path.map(|p| p.to_string_lossy().to_string()),
-            });
-        }
-
-        Ok::<Vec<Migration>, String>(migrations)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    *state.migrations.lock().unwrap() = migrations.clone();
-    Ok(migrations)
+    ops::list_migrations(&state).await
 }
 
 #[tauri::command]
@@ -767,40 +447,7 @@ pub async fn add_migration(
     state: State<'_, Arc<AppState>>,
     name: String,
 ) -> Result<String, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    // Serialize EF-mutating ops across the GUI and the MCP server so two
-    // dotnet ef invocations can't race on the same migrations dir.
-    let op_mutex = state.op_mutex.clone();
-    let _op_guard = op_mutex.lock().await;
-
-    let op = PhasedOp::new(&app, &state, "add_migration");
-    op.emitter()
-        .emit("creating", format!("Creating migration {name}…"));
-
-    let name_clone = name.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        DotnetEf::add_migration(
-            &config.project_path,
-            &name_clone,
-            &config.db_context,
-            &config.startup_project,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    if result.success {
-        Ok(format!("Migration created successfully"))
-    } else {
-        Err(enrich_ef_error(&format!(
-            "Failed to create migration: {}",
-            result.error_output()
-        )))
-    }
+    ops::add_migration(&state, name, TauriPhaseSink::new(&app, "add_migration")).await
 }
 
 #[tauri::command]
@@ -809,44 +456,7 @@ pub async fn remove_migration(
     state: State<'_, Arc<AppState>>,
     force: bool,
 ) -> Result<String, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    // Serialize EF-mutating ops across the GUI and the MCP server.
-    let op_mutex = state.op_mutex.clone();
-    let _op_guard = op_mutex.lock().await;
-
-    let op = PhasedOp::new(&app, &state, "remove_migration");
-    op.emitter().emit(
-        "removing",
-        if force {
-            "Removing migration (force)…".to_string()
-        } else {
-            "Removing last migration…".to_string()
-        },
-    );
-
-    let result = tokio::task::spawn_blocking(move || {
-        DotnetEf::remove_migration(
-            &config.project_path,
-            &config.db_context,
-            &config.startup_project,
-            force,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    if result.success {
-        Ok("Last migration removed successfully".to_string())
-    } else {
-        Err(enrich_ef_error(&format!(
-            "Failed to remove migration: {}",
-            result.error_output()
-        )))
-    }
+    ops::remove_migration(&state, force, TauriPhaseSink::new(&app, "remove_migration")).await
 }
 
 #[tauri::command]
@@ -855,68 +465,12 @@ pub async fn update_database(
     state: State<'_, Arc<AppState>>,
     target: String,
 ) -> Result<String, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    // Serialize EF-mutating ops across the GUI and the MCP server.
-    let op_mutex = state.op_mutex.clone();
-    let _op_guard = op_mutex.lock().await;
-
-    let label = if target.is_empty() {
-        "latest".to_string()
-    } else if target == "0" {
-        "base".to_string()
-    } else {
-        target.clone()
-    };
-
-    let op = PhasedOp::new(&app, &state, "update_database");
-    let emitter = op.emitter();
-    emitter.emit("applying", format!("Updating database to {label}…"));
-
-    let target_clone = target.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        DotnetEf::update_database(
-            &config.project_path,
-            &target_clone,
-            &config.db_context,
-            &config.startup_project,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    if result.success {
-        if target.is_empty() {
-            Ok("Database updated to latest migration".to_string())
-        } else {
-            Ok(format!("Database updated to migration: {}", target))
-        }
-    } else {
-        Err(enrich_ef_error(&format!(
-            "Failed to update database: {}",
-            result.error_output()
-        )))
-    }
+    ops::update_database(&state, target, TauriPhaseSink::new(&app, "update_database")).await
 }
 
 #[tauri::command]
 pub async fn cancel_running_operation(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    // Signal multi-step operations (e.g. branch switch) to bail at the next phase.
-    state
-        .op_cancel
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-
-    let killed = tokio::task::spawn_blocking(DotnetEf::cancel_running_operation)
-        .await
-        .map_err(|e| e.to_string())??;
-
-    Ok(match killed {
-        Some(op) => format!("Cancel requested for '{}'", op),
-        None => "Cancel requested.".to_string(),
-    })
+    ops::cancel_running_operation(&state).await
 }
 
 #[tauri::command]
@@ -924,43 +478,7 @@ pub async fn get_migration_sql(
     state: State<'_, Arc<AppState>>,
     migration_name: String,
 ) -> Result<MigrationSqlInfo, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    tokio::task::spawn_blocking(move || {
-        let file_path = MigrationParser::get_migration_file(&config.project_path, &migration_name)
-            .ok_or_else(|| {
-                format!(
-                    "Migration file not found for '{}' in project '{}'",
-                    migration_name, config.project_path
-                )
-            })?;
-
-        let parsed = MigrationParser::parse_file(&file_path)?;
-        let custom_sql_up = parsed.sql_strings_up();
-        let custom_sql_down = parsed.sql_strings_down();
-
-        Ok(MigrationSqlInfo {
-            name: parsed.file_name,
-            up_body: parsed.up_body,
-            down_body: parsed.down_body,
-            custom_sql_up,
-            custom_sql_down,
-        })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[derive(Serialize)]
-pub struct MigrationSqlInfo {
-    pub name: String,
-    pub up_body: String,
-    pub down_body: String,
-    pub custom_sql_up: Vec<String>,
-    pub custom_sql_down: Vec<String>,
+    ops::get_migration_sql(&state, migration_name).await
 }
 
 // ─── Squash Command ─────────────────────────────────────────────────
@@ -973,201 +491,14 @@ pub async fn squash_migrations(
     to_migration: String,
     new_name: String,
 ) -> Result<String, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-    let migrations = state.migrations.lock().unwrap().clone();
-
-    // Serialize EF-mutating ops across the GUI and the MCP server.
-    let op_mutex = state.op_mutex.clone();
-    let _op_guard = op_mutex.lock().await;
-
-    let op = PhasedOp::new(&app, &state, "squash");
-    let emitter = op.emitter();
-
-    // Numbered step prefix. Bump TOTAL_STEPS if you add/remove a numbered step
-    // (currently: 1 revert, 2 remove, 3 create, 4 apply — scan and inject are
-    // shown without numbers because they're effectively instantaneous).
-    const TOTAL_STEPS: usize = 4;
-    let step_prefix = |n: usize| format!("Step {n}/{TOTAL_STEPS}");
-
-    let result = tokio::task::spawn_blocking(move || {
-        emitter.emit(
-            "scanning",
-            format!("Scanning migrations from {from_migration} to {to_migration}…"),
-        );
-
-        // 1. Collect all custom SQL from migrations in the range (with ordering metadata)
-        let mut in_range = false;
-        let mut all_custom_sql_up: Vec<SqlStatement> = Vec::new();
-        let mut all_custom_sql_down: Vec<SqlStatement> = Vec::new();
-        let mut migrations_to_remove: Vec<String> = Vec::new();
-
-        for m in &migrations {
-            if m.name == from_migration {
-                in_range = true;
-            }
-            if in_range {
-                // Re-parse the file to get SqlStatement objects with ordering metadata
-                if let Some(ref fp) = m.file_path {
-                    if let Ok(parsed) = MigrationParser::parse_file(Path::new(fp)) {
-                        all_custom_sql_up.extend(parsed.custom_sql_up);
-                        all_custom_sql_down.extend(parsed.custom_sql_down);
-                    }
-                }
-                migrations_to_remove.push(m.name.clone());
-            }
-            if m.name == to_migration {
-                break;
-            }
-        }
-
-        let all_custom_sql_up =
-            MigrationParser::deduplicate_sql(all_custom_sql_up, KeepStrategy::Last);
-        let all_custom_sql_down =
-            MigrationParser::deduplicate_sql(all_custom_sql_down, KeepStrategy::First);
-
-        if migrations_to_remove.is_empty() {
-            return Err("No migrations found in the specified range".to_string());
-        }
-
-        let total = migrations_to_remove.len();
-
-        // 2. Update database back to the migration before the range
-        let before_migration = migrations
-            .iter()
-            .take_while(|m| m.name != from_migration)
-            .last()
-            .map(|m| m.name.clone())
-            .unwrap_or_else(|| "0".to_string());
-
-        emitter.check_canceled()?;
-        let revert_label = if before_migration == "0" {
-            "base".to_string()
-        } else {
-            before_migration.clone()
-        };
-        emitter.emit(
-            "reverting",
-            format!("{} — Reverting database to {revert_label}…", step_prefix(1)),
-        );
-        let update_result = DotnetEf::update_database(
-            &config.project_path,
-            &before_migration,
-            &config.db_context,
-            &config.startup_project,
-        )?;
-
-        if !update_result.success {
-            return Err(format!(
-                "Failed to revert database for squash: {}",
-                update_result.error_output()
-            ));
-        }
-
-        // 3. Remove migrations in reverse order
-        for (idx, name) in migrations_to_remove.iter().rev().enumerate() {
-            emitter.check_canceled()?;
-            emitter.emit(
-                "removing",
-                format!(
-                    "{} — Removing migration {}/{}: {}…",
-                    step_prefix(2),
-                    idx + 1,
-                    total,
-                    name
-                ),
-            );
-            let result = DotnetEf::remove_migration(
-                &config.project_path,
-                &config.db_context,
-                &config.startup_project,
-                true,
-            )?;
-
-            if !result.success {
-                return Err(format!(
-                    "Failed to remove migration during squash: {}",
-                    result.error_output()
-                ));
-            }
-        }
-
-        // 4. Create new squashed migration
-        emitter.check_canceled()?;
-        emitter.emit(
-            "creating",
-            format!("{} — Creating squashed migration {new_name}…", step_prefix(3)),
-        );
-        let add_result = DotnetEf::add_migration(
-            &config.project_path,
-            &new_name,
-            &config.db_context,
-            &config.startup_project,
-        )?;
-
-        if !add_result.success {
-            return Err(format!(
-                "Failed to create squashed migration: {}",
-                add_result.error_output()
-            ));
-        }
-
-        // 5. Inject captured custom SQL into the new migration (Up and Down)
-        if !all_custom_sql_up.is_empty() || !all_custom_sql_down.is_empty() {
-            emitter.emit(
-                "injecting",
-                format!(
-                    "Preserving custom SQL ({} Up, {} Down)…",
-                    all_custom_sql_up.len(),
-                    all_custom_sql_down.len()
-                ),
-            );
-        }
-        if let Some(new_file) = MigrationParser::get_migration_file(&config.project_path, &new_name)
-        {
-            if !all_custom_sql_up.is_empty() {
-                MigrationParser::inject_custom_sql(&new_file, "Up", &all_custom_sql_up)?;
-            }
-            if !all_custom_sql_down.is_empty() {
-                MigrationParser::inject_custom_sql(&new_file, "Down", &all_custom_sql_down)?;
-            }
-        }
-
-        // 6. Apply the new squashed migration
-        emitter.check_canceled()?;
-        emitter.emit(
-            "applying",
-            format!("{} — Applying squashed migration {new_name}…", step_prefix(4)),
-        );
-        let final_update = DotnetEf::update_database(
-            &config.project_path,
-            "",
-            &config.db_context,
-            &config.startup_project,
-        )?;
-
-        if !final_update.success {
-            return Err(format!(
-                "Squash created but failed to apply: {}",
-                final_update.error_output()
-            ));
-        }
-
-        Ok(format!(
-            "Squashed {} migrations into '{}'. Custom SQL preserved: {} Up, {} Down.",
-            total,
-            new_name,
-            all_custom_sql_up.len(),
-            all_custom_sql_down.len()
-        ))
-    })
+    ops::squash_migrations(
+        &state,
+        from_migration,
+        to_migration,
+        new_name,
+        TauriPhaseSink::new(&app, "squash"),
+    )
     .await
-    .map_err(|e| e.to_string())??;
-
-    drop(op);
-    Ok(result)
 }
 
 // ─── Script Command ─────────────────────────────────────────────────
@@ -1178,90 +509,14 @@ pub async fn generate_script(
     from: String,
     to: String,
 ) -> Result<String, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    let result = tokio::task::spawn_blocking(move || {
-        DotnetEf::script_migration(
-            &config.project_path,
-            &from,
-            &to,
-            &config.db_context,
-            &config.startup_project,
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    if result.success {
-        Ok(result.stdout)
-    } else {
-        Err(format!(
-            "Failed to generate script: {}",
-            result.error_output()
-        ))
-    }
+    ops::generate_script(&state, from, to).await
 }
 
 // ─── Git / Branch Commands ──────────────────────────────────────────
 
-#[derive(Serialize)]
-pub struct BranchSwitchResult {
-    pub old_branch: String,
-    pub new_branch: String,
-    pub common_migration: Option<String>,
-    pub rollback_target: Option<String>,
-    pub rollback_performed: bool,
-    pub target_migration_count: usize,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BranchInfo {
-    pub name: String,
-    pub is_remote: bool,
-}
-
 #[tauri::command]
 pub async fn list_git_branches(state: State<'_, Arc<AppState>>) -> Result<Vec<BranchInfo>, String> {
-    let project_path = {
-        let guard = state.config.lock().unwrap();
-        guard
-            .as_ref()
-            .ok_or("No project configured")?
-            .project_path
-            .clone()
-    };
-
-    tokio::task::spawn_blocking(move || {
-        let current = GitService::get_current_branch(&project_path).unwrap_or_default();
-        let branches = GitService::list_branches(&project_path)?;
-        Ok(branches
-            .into_iter()
-            .filter(|(name, _)| name != &current)
-            .map(|(name, is_remote)| BranchInfo { name, is_remote })
-            .collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn fetch_remote(state: State<'_, AppState>) -> Result<(), String> {
-    let project_path = {
-        let guard = state.config.lock().unwrap();
-        guard
-            .as_ref()
-            .ok_or("No project configured")?
-            .project_path
-            .clone()
-    };
-
-    tokio::task::spawn_blocking(move || GitService::fetch(&project_path))
-        .await
-        .map_err(|e| e.to_string())?
+    ops::list_git_branches(&state).await
 }
 
 #[tauri::command]
@@ -1270,235 +525,17 @@ pub async fn switch_branch_with_migrations(
     state: State<'_, Arc<AppState>>,
     target_branch: String,
 ) -> Result<BranchSwitchResult, String> {
-    let config = {
-        let guard = state.config.lock().unwrap();
-        guard.as_ref().ok_or("No project configured")?.clone()
-    };
-
-    // Serialize EF-mutating ops across the GUI and the MCP server.
-    let op_mutex = state.op_mutex.clone();
-    let _op_guard = op_mutex.lock().await;
-
-    let project_path_for_error = config.project_path.clone();
-    let op = PhasedOp::new(&app, &state, "switch_branch");
-    let emitter = op.emitter();
-
-    let result = tokio::task::spawn_blocking(move || {
-        let target_branch = target_branch.trim().to_string();
-        if target_branch.is_empty() {
-            return Err("Choose a branch to switch to".to_string());
-        }
-
-        emitter.emit("preparing", format!("Preparing to switch to {target_branch}…"));
-
-        let old_branch = GitService::get_current_branch(&config.project_path)?;
-        if old_branch == target_branch {
-            return Ok(BranchSwitchResult {
-                old_branch: old_branch.clone(),
-                new_branch: old_branch,
-                common_migration: None,
-                rollback_target: None,
-                rollback_performed: false,
-                target_migration_count: 0,
-            });
-        }
-
-        if !GitService::ref_exists(&config.project_path, &target_branch)? {
-            return Err(format!("Git branch not found: {}", target_branch));
-        }
-
-        if !GitService::is_working_tree_clean(&config.project_path)? {
-            return Err(
-                "Working tree has uncommitted changes. Commit, stash, or discard them before using automatic branch switch."
-                    .to_string(),
-            );
-        }
-        emitter.check_canceled()?;
-
-        let repo_root = GitService::get_repo_root(&config.project_path)?;
-        let migrations_dir = MigrationParser::find_migrations_dir(&config.project_path)?;
-        let migrations_pathspec = path_relative_to_repo(&repo_root, &migrations_dir)?;
-
-        emitter.emit("reading-target", format!("Reading migrations on {target_branch}…"));
-        let target_files =
-            GitService::list_files_at_ref(&repo_root, &target_branch, &migrations_pathspec)?;
-        let target_migrations: Vec<String> = target_files
-            .iter()
-            .filter_map(|path| migration_name_from_git_path(path))
-            .collect();
-
-        let current_files = MigrationParser::find_migration_files(&config.project_path)
-            .map(migration_names_from_files)
-            .unwrap_or_default();
-
-        emitter.check_canceled()?;
-        emitter.emit(
-            "listing-applied",
-            "Listing applied migrations in the database…",
-        );
-        let ef_migrations = DotnetEf::list_migrations(
-            &config.project_path,
-            &config.db_context,
-            &config.startup_project,
-        )
-        .map_err(|e| enrich_ef_error(&e))?;
-
-        let ef_migration_names: Vec<String> = ef_migrations
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect();
-        let current_migrations = if ef_migration_names.is_empty() {
-            current_files
-        } else {
-            ef_migration_names
-        };
-
-        let common_migration = latest_common_migration(&current_migrations, &target_migrations);
-        let common_index = common_migration
-            .as_ref()
-            .and_then(|name| current_migrations.iter().position(|m| m == name));
-        let latest_applied_index = ef_migrations.iter().rposition(|(_, applied)| *applied);
-
-        if common_migration.is_none() && latest_applied_index.is_some() {
-            let preview = |list: &[String]| -> String {
-                if list.is_empty() {
-                    "(empty)".to_string()
-                } else {
-                    let shown: Vec<String> = list.iter().take(5).cloned().collect();
-                    let suffix = if list.len() > 5 {
-                        format!(", … (+{} more)", list.len() - 5)
-                    } else {
-                        String::new()
-                    };
-                    format!("[{}{}]", shown.join(", "), suffix)
-                }
-            };
-            return Err(format!(
-                "No common migration found between '{}' and '{}'. Refusing to revert all applied migrations automatically — this is almost always caused by mismatched migration filenames or a different migrations folder path on the target branch.\n\nCurrent branch migrations ({}): {}\nTarget branch migrations ({}): {}\nMigrations pathspec: {}",
-                old_branch,
-                target_branch,
-                current_migrations.len(),
-                preview(&current_migrations),
-                target_migrations.len(),
-                preview(&target_migrations),
-                migrations_pathspec,
-            ));
-        }
-
-        let rollback_target = match (latest_applied_index, common_index) {
-            (Some(applied), Some(common)) if applied > common => common_migration.clone(),
-            _ => None,
-        };
-
-        let mut rollback_performed = false;
-        if let Some(ref target) = rollback_target {
-            emitter.check_canceled()?;
-            let label = if target == "0" { "base" } else { target.as_str() };
-            emitter.emit(
-                "rolling-back",
-                format!("Rolling database back to {label}…"),
-            );
-            let rollback = DotnetEf::update_database(
-                &config.project_path,
-                target,
-                &config.db_context,
-                &config.startup_project,
-            )?;
-
-            if !rollback.success {
-                return Err(enrich_ef_error(&format!(
-                    "Failed to roll back before switching branches: {}",
-                    rollback.error_output()
-                )));
-            }
-
-            rollback_performed = true;
-        }
-
-        emitter.check_canceled()?;
-        emitter.emit("switching-git", format!("Switching git to {target_branch}…"));
-        GitService::switch_branch(&config.project_path, &target_branch)?;
-        let new_branch = GitService::get_current_branch(&config.project_path)
-            .unwrap_or_else(|_| target_branch.clone());
-
-        emitter.check_canceled()?;
-        let pending = match (common_index, target_migrations.len()) {
-            (Some(common), total) if total > common + 1 => total - common - 1,
-            (None, total) => total,
-            _ => 0,
-        };
-        let apply_msg = if pending > 0 {
-            format!(
-                "Applying {} pending migration{} on {}…",
-                pending,
-                if pending == 1 { "" } else { "s" },
-                new_branch
-            )
-        } else {
-            format!("Updating database on {}…", new_branch)
-        };
-        emitter.emit("applying", apply_msg);
-        let update = DotnetEf::update_database(
-            &config.project_path,
-            "",
-            &config.db_context,
-            &config.startup_project,
-        )?;
-
-        if !update.success {
-            return Err(enrich_ef_error(&format!(
-                "Switched to '{}', but failed to update the database: {}",
-                new_branch,
-                update.error_output()
-            )));
-        }
-
-        Ok(BranchSwitchResult {
-            old_branch,
-            new_branch,
-            common_migration,
-            rollback_target,
-            rollback_performed,
-            target_migration_count: target_migrations.len(),
-        })
-    })
+    ops::switch_branch_with_migrations(
+        &state,
+        target_branch,
+        TauriPhaseSink::new(&app, "switch_branch"),
+    )
     .await
-    .map_err(|e| e.to_string())?;
-
-    drop(op);
-
-    match result {
-        Ok(result) => {
-            *state.current_branch.lock().unwrap() = result.new_branch.clone();
-            state.migrations.lock().unwrap().clear();
-            Ok(result)
-        }
-        Err(err) => {
-            if let Ok(branch) = GitService::get_current_branch(&project_path_for_error) {
-                *state.current_branch.lock().unwrap() = branch;
-            }
-            Err(err)
-        }
-    }
 }
 
 #[tauri::command]
 pub async fn get_current_branch(state: State<'_, Arc<AppState>>) -> Result<String, String> {
-    let project_path = {
-        let guard = state.config.lock().unwrap();
-        guard
-            .as_ref()
-            .ok_or("No project configured")?
-            .project_path
-            .clone()
-    };
-
-    let branch = tokio::task::spawn_blocking(move || GitService::get_current_branch(&project_path))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    *state.current_branch.lock().unwrap() = branch.clone();
-    Ok(branch)
+    ops::get_current_branch(&state).await
 }
 
 #[tauri::command]

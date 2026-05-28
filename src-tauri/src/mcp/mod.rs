@@ -7,7 +7,6 @@
 //! `Arc<AppState>` as the Tauri command handlers, so MCP tool calls hit the
 //! exact same code paths as the GUI.
 
-mod instructions;
 mod resources;
 mod server;
 
@@ -16,7 +15,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use serde::{Deserialize, Serialize};
+
 use crate::state::AppState;
+
+/// Discovery document written to [`port_file_path`] so external MCP clients
+/// (typically AI agents) can find the loopback port without a config dance.
+#[derive(Serialize, Deserialize)]
+struct PortFile {
+    port: u16,
+    pid: u32,
+    started_at_unix_ms: u64,
+    transport: String,
+    url: String,
+}
 
 /// Bind a loopback HTTP listener on a random port, spawn the rmcp/axum server
 /// onto the current tokio runtime, and return the chosen port. The serve
@@ -24,12 +36,13 @@ use crate::state::AppState;
 /// shutdown handle because the server lives and dies with the Tauri app.
 pub async fn start_mcp_server(
     state: Arc<AppState>,
+    store: Arc<dyn crate::ops::ConfigStore>,
 ) -> Result<u16, Box<dyn std::error::Error + Send + Sync>> {
     // Bind first so we know the real port before we advertise it.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
 
-    let router = server::build_axum_router(state);
+    let router = server::build_axum_router(state, store);
 
     // Advertise the port BEFORE handing the listener to axum so an agent that
     // polls the port file the instant we log "listening" can connect on the
@@ -69,48 +82,34 @@ pub fn port_file_path() -> PathBuf {
 
 /// Read the PID from an existing port file, if one exists and is parseable.
 ///
-/// Returns `None` for "no file", "unreadable", or "PID field missing /
-/// malformed". The caller can use a fresh `None` from a missing file the same
-/// way as a stale-and-unrecoverable file: take the slot.
-///
-/// We hand-parse rather than depending on `serde_json` for this lookup so
-/// other binaries can use it without paying the JSON-deserialisation cost
-/// for what is effectively a five-line file under our own control.
+/// Returns `None` for "no file", "unreadable", or malformed JSON. The caller
+/// can use a fresh `None` from a missing file the same way as a
+/// stale-and-unrecoverable file: take the slot.
 pub fn read_port_file_pid() -> Option<u32> {
     let body = fs::read_to_string(port_file_path()).ok()?;
-    // Look for `"pid": <digits>` — tolerates whitespace variations and the
-    // hand-formatted layout `write_port_file` produces. If the format ever
-    // grows nested objects we'll switch to a real parser.
-    let key_pos = body.find("\"pid\"")?;
-    let after_key = &body[key_pos + "\"pid\"".len()..];
-    let colon = after_key.find(':')?;
-    let after_colon = after_key[colon + 1..].trim_start();
-    let digits: String = after_colon.chars().take_while(|c| c.is_ascii_digit()).collect();
-    digits.parse().ok()
+    serde_json::from_str::<PortFile>(&body).ok().map(|p| p.pid)
 }
 
-/// Write the discovery JSON. We hand-roll the timestamp via `SystemTime` so
-/// we don't have to pull in `chrono` just for an ISO-8601 string.
+/// Write the discovery JSON. The timestamp is a raw unix-ms value so we don't
+/// have to pull in `chrono` just for an ISO-8601 string.
 fn write_port_file(port: u16) -> std::io::Result<()> {
     let path = port_file_path();
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
 
-    let started_at_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+    let doc = PortFile {
+        port,
+        pid: std::process::id(),
+        started_at_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        transport: "http".to_string(),
+        url: format!("http://127.0.0.1:{port}/mcp"),
+    };
 
-    // We intentionally hand-format rather than going through `serde_json` so
-    // a future reader can eyeball the file without firing up jq. The values
-    // are all primitives we control, so escaping isn't a concern here.
-    let body = format!(
-        "{{\n  \"port\": {port},\n  \"pid\": {pid},\n  \"started_at_unix_ms\": {started_at_unix_ms},\n  \"transport\": \"http\",\n  \"url\": \"http://127.0.0.1:{port}/mcp\"\n}}\n",
-        port = port,
-        pid = std::process::id(),
-        started_at_unix_ms = started_at_unix_ms,
-    );
-
+    let body = serde_json::to_string_pretty(&doc)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     fs::write(&path, body)
 }

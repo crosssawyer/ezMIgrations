@@ -10,10 +10,8 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::dotnet::DotnetEf;
-use crate::git::GitService;
-use crate::parser::MigrationParser;
-use crate::state::{AppState, Migration, ProjectConfig};
+use crate::ops;
+use crate::state::AppState;
 
 /// All URI templates we advertise via `list_resources` / `list_resource_templates`.
 pub mod uri {
@@ -85,75 +83,29 @@ pub fn read_preferences(state: &AppState) -> Result<String, String> {
 }
 
 /// `ezmigrations://migrations` — JSON of the current migration list (refreshed
-/// from EF, same path as `list_migrations`).
+/// from EF, same code path as the `list_migrations` tool).
 pub async fn read_migrations(state: Arc<AppState>) -> Result<String, String> {
-    let config = require_project(&state)?;
-    let migrations = list_migrations_inner(config).await?;
-    *state.migrations.lock().unwrap() = migrations.clone();
+    let migrations = ops::list_migrations(&state).await?;
     serde_json::to_string_pretty(&migrations).map_err(|e| e.to_string())
 }
 
 /// `ezmigrations://migrations/{name}/sql` — JSON of parsed SQL for one
 /// migration (custom_sql_up/down + Up/Down bodies).
 pub async fn read_migration_sql(state: Arc<AppState>, name: &str) -> Result<String, String> {
-    let config = require_project(&state)?;
-    let migration_name = name.to_string();
-
-    let info = tokio::task::spawn_blocking(move || {
-        let file_path = MigrationParser::get_migration_file(&config.project_path, &migration_name)
-            .ok_or_else(|| {
-                format!(
-                    "Migration file not found for '{}' in project '{}'",
-                    migration_name, config.project_path
-                )
-            })?;
-        let parsed = MigrationParser::parse_file(&file_path)?;
-        Ok::<_, String>(serde_json::json!({
-            "name": parsed.file_name,
-            "up_body": parsed.up_body,
-            "down_body": parsed.down_body,
-            "custom_sql_up": parsed.sql_strings_up(),
-            "custom_sql_down": parsed.sql_strings_down(),
-        }))
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let info = ops::get_migration_sql(&state, name.to_string()).await?;
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
 
 /// `ezmigrations://branches` — JSON of all git branches (local + remote),
-/// excluding the current one (mirrors `list_git_branches`).
+/// excluding the current one (mirrors the `list_git_branches` tool).
 pub async fn read_branches(state: Arc<AppState>) -> Result<String, String> {
-    let project_path = require_project(&state)?.project_path;
-
-    let branches = tokio::task::spawn_blocking(move || {
-        let current = GitService::get_current_branch(&project_path).unwrap_or_default();
-        let branches = GitService::list_branches(&project_path)?;
-        Ok::<_, String>(
-            branches
-                .into_iter()
-                .filter(|(name, _)| name != &current)
-                .map(|(name, is_remote)| {
-                    serde_json::json!({ "name": name, "isRemote": is_remote })
-                })
-                .collect::<Vec<_>>(),
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
+    let branches = ops::list_git_branches(&state).await?;
     serde_json::to_string_pretty(&branches).map_err(|e| e.to_string())
 }
 
 /// `ezmigrations://branches/current` — plain string of the current branch.
 pub async fn read_current_branch(state: Arc<AppState>) -> Result<String, String> {
-    let project_path = require_project(&state)?.project_path;
-    let branch = tokio::task::spawn_blocking(move || GitService::get_current_branch(&project_path))
-        .await
-        .map_err(|e| e.to_string())??;
-    *state.current_branch.lock().unwrap() = branch.clone();
-    Ok(branch)
+    ops::get_current_branch(&state).await
 }
 
 /// `ezmigrations://app/status` — snapshot of high-level app state.
@@ -197,64 +149,3 @@ pub fn parse_migration_sql_uri(uri: &str) -> Option<&str> {
     Some(name)
 }
 
-pub fn require_project(state: &AppState) -> Result<ProjectConfig, String> {
-    state
-        .config
-        .lock()
-        .unwrap()
-        .as_ref()
-        .cloned()
-        .ok_or_else(|| "No project configured".to_string())
-}
-
-/// Shared migration list builder used by both the tool and the resource so
-/// they stay in lock-step. Mirrors `commands::list_migrations` minus the
-/// Tauri `State` extraction.
-pub async fn list_migrations_inner(config: ProjectConfig) -> Result<Vec<Migration>, String> {
-    tokio::task::spawn_blocking(move || {
-        let ef_migrations = DotnetEf::list_migrations(
-            &config.project_path,
-            &config.db_context,
-            &config.startup_project,
-        )?;
-
-        let all_files =
-            MigrationParser::find_migration_files(&config.project_path).unwrap_or_default();
-
-        let mut migrations: Vec<Migration> = Vec::new();
-        for (name, applied) in &ef_migrations {
-            let file_path = all_files.iter().find(|f| {
-                f.file_stem()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.contains(name) || name.contains(s))
-                    .unwrap_or(false)
-            });
-
-            let (has_custom_sql, custom_sql_up, custom_sql_down) = if let Some(fp) = file_path {
-                match MigrationParser::parse_file(fp) {
-                    Ok(parsed) => (
-                        parsed.has_custom_sql,
-                        parsed.sql_strings_up(),
-                        parsed.sql_strings_down(),
-                    ),
-                    Err(_) => (false, Vec::new(), Vec::new()),
-                }
-            } else {
-                (false, Vec::new(), Vec::new())
-            };
-
-            migrations.push(Migration {
-                id: name.clone(),
-                name: name.clone(),
-                applied: *applied,
-                has_custom_sql,
-                custom_sql_up,
-                custom_sql_down,
-                file_path: file_path.map(|p| p.to_string_lossy().to_string()),
-            });
-        }
-        Ok(migrations)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}

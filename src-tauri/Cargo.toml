@@ -30,8 +30,11 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "net", "ma
 
 # MCP server: exposes the Tauri command surface to AI agents over loopback HTTP.
 rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-http-server"] }
+# Must track the schemars major version rmcp re-exports (`rmcp::schemars`) so
+# `#[derive(JsonSchema)]` on shared types (e.g. `state::Preferences`) satisfies
+# the `Parameters<T>` bound on MCP tools.
 axum = "0.8"
-schemars = "0.8"
+schemars = "1"
 dirs = "5"
 
 [dev-dependencies]

@@ -1,5 +1,6 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -20,8 +21,9 @@ pub struct SavedProject {
     pub stable_migration: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Preferences {
+    /// Show a dialog when the file-watcher detects an external branch change.
     #[serde(default = "default_true")]
     pub notify_on_branch_change: bool,
 }
@@ -76,6 +78,7 @@ pub struct AppState {
     pub op_mutex: Arc<AsyncMutex<()>>,
 }
 
+<<<<<<< HEAD
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +201,22 @@ mod tests {
         assert!(back.has_custom_sql);
         assert_eq!(back.custom_sql_up, vec!["SELECT 1".to_string()]);
         assert_eq!(back.file_path.as_deref(), Some("/p/M1.cs"));
+    }
+}
+
+impl AppState {
+    /// Clear the cooperative-cancel flag so the next operation starts clean.
+    pub fn reset_op_cancel(&self) {
+        self.op_cancel.store(false, Ordering::SeqCst);
+    }
+
+    /// Request cancellation of the in-flight multi-step operation.
+    pub fn request_cancel(&self) {
+        self.op_cancel.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether cancellation has been requested for the current operation.
+    pub fn is_canceled(&self) -> bool {
+        self.op_cancel.load(Ordering::SeqCst)
     }
 }

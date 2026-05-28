@@ -15,6 +15,7 @@ use std::process;
 use std::sync::Arc;
 
 use ez_migrations_lib::mcp;
+use ez_migrations_lib::ops::{ConfigStore, FileConfigStore};
 use ez_migrations_lib::state::AppState;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -50,15 +51,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     // `AppState::default()` is fully Tauri-independent — every field is a
-    // `Mutex<Default>` / `Arc<AsyncMutex<...>>` — so we can build it without
-    // an `AppHandle`. The trade-off: config that the GUI persists via
-    // `AppHandle::path()` isn't loaded here; the running session starts with
-    // an empty project list and `set_project` / `save_project` calls live in
-    // memory only. That's the same persistence story documented in the
-    // server `instructions` debrief.
+    // `Mutex<Default>` / `Arc<AsyncMutex<...>>` — so we can build it without an
+    // `AppHandle`. Headless config lives in its own file (a separate location
+    // from the GUI's bundle-scoped store, since that path needs an AppHandle),
+    // so we seed in-memory state from it and persist mutations back to it.
     let state = Arc::new(AppState::default());
+    let store = Arc::new(FileConfigStore::app_data());
+    if let Some(saved) = store.load() {
+        *state.app_config.lock().unwrap() = saved;
+    }
 
-    let port = mcp::start_mcp_server(state).await?;
+    let store: Arc<dyn ConfigStore> = store;
+    let port = mcp::start_mcp_server(state, store).await?;
 
     eprintln!(
         "ezmigrations-mcp listening on http://127.0.0.1:{}/mcp (headless)",
@@ -96,17 +100,24 @@ fn pid_alive(pid: u32) -> bool {
     }
     #[cfg(windows)]
     {
-        // `tasklist /FI "PID eq <pid>"` prints "INFO: No tasks are running
-        // which match the specified criteria." when nothing matches. We grep
-        // the output rather than parse it because the table format isn't
-        // stable across Windows locales — the "No tasks" sentinel is.
+        // `tasklist /FO CSV /NH /FI "PID eq <pid>"` prints one quoted CSV row
+        // per matching process, and a plain-text notice otherwise. We confirm
+        // the PID appears as the second CSV field rather than grepping for the
+        // "No tasks" sentinel, which is localized and differs across Windows
+        // display languages. The CSV row structure is not.
         let out = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid)])
+            .args(["/FO", "CSV", "/NH", "/FI", &format!("PID eq {}", pid)])
             .output();
         match out {
             Ok(o) => {
                 let stdout = String::from_utf8_lossy(&o.stdout);
-                !stdout.contains("No tasks")
+                let pid_str = pid.to_string();
+                stdout.lines().any(|line| {
+                    line.split(',')
+                        .nth(1)
+                        .map(|field| field.trim().trim_matches('"') == pid_str)
+                        .unwrap_or(false)
+                })
             }
             Err(_) => false,
         }
