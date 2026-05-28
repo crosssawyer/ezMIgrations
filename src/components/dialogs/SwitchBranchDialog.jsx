@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ArrowRight, GitBranch, Check, Cloud } from "lucide-react";
+import { ArrowRight, GitBranch, Check, Cloud, RefreshCw } from "lucide-react";
 
 import {
   Dialog,
@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useBranches, useCurrentBranch } from "@/lib/queries";
-import { useSwitchBranch } from "@/lib/mutations";
+import { useSwitchBranch, useFetchRemote } from "@/lib/mutations";
 
 function BranchChip({ label, tone = "muted" }) {
   return (
@@ -70,6 +70,7 @@ export function SwitchBranchDialog({ onClose }) {
   const { data: branches = [], isLoading } = useBranches();
   const { data: currentBranch = "" } = useCurrentBranch();
   const switchBranch = useSwitchBranch();
+  const fetchRemote = useFetchRemote();
   const [selected, setSelected] = React.useState("");
 
   const locals = React.useMemo(
@@ -93,7 +94,7 @@ export function SwitchBranchDialog({ onClose }) {
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="!flex !flex-col !w-[min(28rem,calc(100vw-2rem))] !max-w-none !max-h-[calc(100vh-2rem)] p-0 gap-0 overflow-hidden">
-        <DialogHeader className="shrink-0 px-5 pt-5 pb-2">
+        <DialogHeader className="shrink-0 px-5 pt-5 pb-2 pr-12">
           <DialogTitle>Switch branch</DialogTitle>
           <DialogDescription className="text-sm leading-relaxed text-foreground/80">
             Branch-only migrations roll back first, then the working tree switches
@@ -101,17 +102,31 @@ export function SwitchBranchDialog({ onClose }) {
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={onSubmit} className="flex flex-col min-h-0 flex-1">
+        <form onSubmit={onSubmit} className="flex flex-col min-h-0">
           <div className="shrink-0 flex items-center gap-2 px-5 pb-3 min-w-0">
             <BranchChip label={currentBranch || "current"} tone="muted" />
             <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <BranchChip label={selected || "select branch"} tone="primary" />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="ml-auto shrink-0 gap-1.5"
+              onClick={() => fetchRemote.mutate()}
+              disabled={fetchRemote.isPending || switchBranch.isPending}
+              title="Fetch the latest branches from the remote"
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", fetchRemote.isPending && "animate-spin")}
+              />
+              {fetchRemote.isPending ? "Fetching…" : "Fetch"}
+            </Button>
           </div>
 
-          <div className="flex-1 min-h-0 flex flex-col border-y border-border bg-popover">
-            <Command className="flex-1 min-h-0 rounded-none border-0 bg-transparent">
+          <div className="min-h-0 flex flex-col border-y border-border bg-popover">
+            <Command className="min-h-0 rounded-none border-0 bg-transparent">
               <CommandInput placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
-              <CommandList className="flex-1 min-h-0 max-h-none">
+              <CommandList className="max-h-[clamp(200px,42vh,360px)]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
                 {locals.length > 0 && (
                   <CommandGroup heading="Local">
@@ -145,7 +160,7 @@ export function SwitchBranchDialog({ onClose }) {
 
           <DialogFooter className="shrink-0 px-5 py-3">
             <Button type="button" variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button type="submit" size="sm" disabled={!selected || isLoading || switchBranch.isPending}>
+            <Button type="submit" size="sm" disabled={!selected || isLoading || switchBranch.isPending || fetchRemote.isPending}>
               {switchBranch.isPending ? "Switching…" : "Switch & Update"}
             </Button>
           </DialogFooter>
