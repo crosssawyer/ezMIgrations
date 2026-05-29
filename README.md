@@ -14,7 +14,7 @@ ezMigrations wraps `dotnet ef` in a focused UI that understands your git branche
 - **Foreign migration detection** — when migrations applied in another branch show up as `Applied` after a `Pending`, ezMigrations flags them with a red border, a source-branch label, and a one-click "Revert Foreign" button.
 - **Branch-change prompts** — a file watcher on `.git/HEAD` notices when you switch branches outside the app and offers to reconcile the database. Configurable in Preferences.
 - **Stable migration pin** — mark any migration as the safe rollback point used by automated branch switches.
-- **Remote branches in the picker** — local and remote branches are listed together in the switch dialog.
+- **Remote branches in the picker** — local and remote branches are listed together in the switch dialog, with an in-dialog **Fetch** button to pull newly pushed branches without leaving the app. The dialog is fully keyboard-drivable.
 
 ### Migration management
 
@@ -22,6 +22,7 @@ ezMigrations wraps `dotnet ef` in a focused UI that understands your git branche
 - **Create, remove, and apply migrations** — all the usual `dotnet ef` operations from the toolbar, with a working cancel button on every long-running command.
 - **Update database to any point** — apply forward, roll back, or jump to a specific migration.
 - **Generate SQL scripts** — produce a script between any two migration points.
+- **SQL detail panel** — inspect a migration's Up, Down, and custom SQL in a resizable panel, with an **All** tab and copy-all button for the combined custom SQL.
 - **Drift detection** — banner appears when pending migrations are detected, and the app re-checks state every time the window regains focus.
 
 ### Productivity
@@ -30,7 +31,7 @@ ezMigrations wraps `dotnet ef` in a focused UI that understands your git branche
 - **Auto-detected startup project** — ezMigrations reads your solution and picks the right startup project for design-time `DbContext` discovery automatically.
 - **Per-step operation feedback** — long-running flows like managed branch switching show a phase-by-phase overlay so you know exactly which step is running.
 - **Multi-project support** — save multiple EF projects and switch between them from the settings panel.
-- **Search, filter, and shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `Esc` to clear, `?` for the full hotkey list.
+- **Search, filter, and shortcuts** — `Ctrl+N` new, `Ctrl+R` refresh, `Ctrl+F` filter, `Esc` to clear, `?` for the full hotkey list. The migrations table is fully keyboard-navigable with arrow keys.
 - **Toast notifications and preferences** — non-intrusive feedback for mutations and copy actions; toggle branch-change prompts in Preferences.
 
 ## Install

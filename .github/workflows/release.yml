@@ -19,6 +19,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      body: ${{ steps.notes.outputs.body }}
     steps:
       - uses: actions/checkout@v4
 
@@ -36,6 +37,34 @@ jobs:
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${TAG#v}"
+          FALLBACK="See the assets below to download the installer for your platform."
+          # Pull the body of the matching "## [X.Y.Z]" section (excluding the
+          # heading) and trim leading/trailing blank lines.
+          BODY="$(awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { flag=1; next }
+            flag && /^## \[/ { flag=0 }
+            flag { buf[n++]=$0 }
+            END {
+              s=0; while (s<n && buf[s] ~ /^[[:space:]]*$/) s++
+              e=n-1; while (e>=s && buf[e] ~ /^[[:space:]]*$/) e--
+              for (i=s;i<=e;i++) print buf[i]
+            }
+          ' CHANGELOG.md)"
+          if [ -z "$BODY" ]; then
+            echo "No CHANGELOG section for $VERSION; using fallback body."
+            BODY="$FALLBACK"
+          fi
+          {
+            echo 'body<<RELEASE_NOTES_EOF'
+            echo "$BODY"
+            echo 'RELEASE_NOTES_EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create tag (manual dispatch only)
         if: github.event_name == 'workflow_dispatch'
@@ -94,6 +123,6 @@ jobs:
           tauriScript: npx tauri
           tagName: ${{ needs.create-release.outputs.tag }}
           releaseName: ezMigrations ${{ needs.create-release.outputs.tag }}
-          releaseBody: "See the assets below to download the installer for your platform."
+          releaseBody: ${{ needs.create-release.outputs.body }}
           releaseDraft: false
           prerelease: ${{ needs.create-release.outputs.prerelease }}

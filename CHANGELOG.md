@@ -2,6 +2,35 @@
 
 All notable changes to ezMigrations are documented here.
 
+## [1.2.0] - 2026-05-29
+
+### Added
+- **Keyboard navigation in the migrations table** — arrow keys move a focus cursor through migration rows, with a declarative shortcut table driving update, branch menu, fetch, and switch actions (`790c810`, `1c90aa5`, `26a5f08`)
+- **Keyboard-drivable branch switch dialog** — the whole switch dialog can be operated from the keyboard, with the filter input autofocused on open (`7688204`)
+- **"All" tab and copy-all for custom SQL** — the detail panel adds an All tab that aggregates every custom SQL section with a one-click copy of the combined script (`d5ff1a0`)
+- **Resizable detail panel** — drag to resize the migration detail panel (`76d0648`)
+- **Git fetch before switching** — refresh remote branches on demand from the switch dialog so newly pushed branches show up without leaving the app (`505199a`)
+
+### Changed
+- Drive global shortcuts from a single declarative binding table behind one keydown listener instead of scattered handlers (`ac8efa9`, `86f3b92`)
+- Render the SQL tabs from a single section descriptor (`d31314d`)
+- Surface the raw `list_migrations` error in the empty-table area instead of silently showing "No migrations found", so failures can be copied and reported (`4247c42`)
+- Auto-mark releases as pre-release when the tag contains a `-` (`80c7a91`)
+
+### Fixed
+- Stop corrupting `PATH` on Windows when invoking `dotnet ef` — enrich `PATH` with the per-user dotnet tools dirs using the `;` separator (`4247c42`)
+- Stop mouse hover from hijacking the keyboard switch target in the branch dialog (`0c5c8f3`)
+- Keep the branch-dialog filter focusable so the on-open autofocus lands (`7066ff0`)
+- Stop overclaiming ARIA on the table keyboard cursor (`b558051`)
+- Keep the SQL copy button on-screen by scrolling long lines, and fix SQL horizontal overflow (`e0bb299`, `76d0648`)
+- Cap the branch-switch dialog height instead of filling the viewport (`b8d2a96`)
+- Move the Fetch button out of the dialog close-X corner (`1744968`)
+- Harden the git fetch path against edge cases found in review (`82c8f60`)
+
+### Internal
+- Add Rust unit tests, a vitest + React Testing Library setup, and a CI workflow; cover `enrich_path` and local-branch-name helpers (`936c6bc`, `07aaf18`)
+- Rewrite the README and add architecture + releasing docs (`172f4c2`)
+
 ## [1.1.0] - 2026-05-22
 
 ### Added

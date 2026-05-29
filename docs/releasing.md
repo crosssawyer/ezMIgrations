@@ -24,6 +24,10 @@ You want to cut `v1.2.0`. From a clean tree:
    cd src-tauri && cargo check
    ```
 
+   Also add a `## [1.2.0] - <date>` section to `CHANGELOG.md`. The release
+   workflow uses that section verbatim as the GitHub Release body, so write
+   it before you tag (see [What the pipeline does](#what-the-pipeline-does)).
+
 2. Commit on `nightly`:
 
    ```bash
@@ -126,11 +130,16 @@ Steps per matrix entry:
      to produce the Vite output in `dist/`.
    - Runs `npx tauri build`, which bundles the Rust binary plus the frontend
      into platform installers.
-   - Creates the GitHub Release (named `ezMigrations <tag>`, body `"See the
-     assets below to download the installer for your platform."`, not a
-     draft). The release is marked as a pre-release iff the tag contains a
-     `-` (e.g. `v1.1.0-1`, `v1.2.0-nightly`); plain `vX.Y.Z` tags publish as
-     full releases.
+   - Creates the GitHub Release (named `ezMigrations <tag>`, not a draft).
+     The body is the `## [X.Y.Z]` section of `CHANGELOG.md` matching the
+     tag's version, extracted by the `Extract release notes from CHANGELOG`
+     step in the `create-release` job. If no matching section exists (e.g. a
+     nightly whose version isn't in the changelog), it falls back to `"See
+     the assets below to download the installer for your platform."` So:
+     **add the changelog section before you tag**, or the notes fall back to
+     the generic line. The release is marked as a pre-release iff the tag
+     contains a `-` (e.g. `v1.1.0-1`, `v1.2.0-nightly`); plain `vX.Y.Z` tags
+     publish as full releases.
    - Uploads the built installers as release assets.
 
 Inputs / secrets:
