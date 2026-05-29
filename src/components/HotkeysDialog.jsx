@@ -11,6 +11,9 @@ const SHORTCUTS = [
   ["⌘ N", "New migration"],
   ["⌘ R", "Refresh migrations"],
   ["⌘ F", "Focus search / filter"],
+  ["↑ ↓", "Navigate migrations"],
+  ["Enter", "Open details"],
+  ["Space", "Toggle selection"],
   ["Esc", "Close panel / dialog"],
   ["?", "Toggle this help"],
 ];

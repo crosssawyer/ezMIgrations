@@ -197,6 +197,81 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
     getSortedRowModel: getSortedRowModel(),
   });
 
+  const rows = table.getRowModel().rows;
+  const visibleIds = rows.map((r) => r.original.id);
+  const visibleKey = visibleIds.join("|");
+
+  // Keyboard navigation: `activeId` is a focus cursor, independent of the
+  // detail panel (which `selectedMigrationId` drives). Arrows move the cursor,
+  // Enter opens its detail, Space toggles its squash checkbox.
+  const gridRef = React.useRef(null);
+  const rowRefs = React.useRef(new Map());
+  const didAutoFocus = React.useRef(false);
+  const [activeId, setActiveId] = React.useState(null);
+
+  // Keep the cursor pointing at a visible row as filtering/sorting changes.
+  React.useEffect(() => {
+    if (visibleIds.length === 0) {
+      setActiveId(null);
+      return;
+    }
+    setActiveId((cur) => {
+      if (cur && visibleIds.includes(cur)) return cur;
+      if (selectedMigrationId && visibleIds.includes(selectedMigrationId)) return selectedMigrationId;
+      return visibleIds[0];
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey, selectedMigrationId]);
+
+  // Focus the grid once it first has rows so arrows work without a click —
+  // but never steal focus from an input the user is already typing in.
+  React.useEffect(() => {
+    if (didAutoFocus.current || visibleIds.length === 0 || !gridRef.current) return;
+    const active = document.activeElement;
+    const inInput = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
+    if (!inInput && (!active || active === document.body)) {
+      gridRef.current.focus({ preventScroll: true });
+    }
+    didAutoFocus.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey]);
+
+  function moveActive(target) {
+    if (visibleIds.length === 0) return;
+    setActiveId((cur) => {
+      const curIdx = Math.max(0, visibleIds.indexOf(cur));
+      const nextIdx =
+        target === "first" ? 0
+        : target === "last" ? visibleIds.length - 1
+        : Math.min(visibleIds.length - 1, Math.max(0, curIdx + target));
+      const nextId = visibleIds[nextIdx];
+      rowRefs.current.get(nextId)?.scrollIntoView({ block: "nearest" });
+      // When the panel is open, let it follow the cursor (master-detail).
+      if (selectedMigrationId != null) setSelectedMigrationId(nextId);
+      return nextId;
+    });
+  }
+
+  function onGridKeyDown(e) {
+    switch (e.key) {
+      case "ArrowDown": e.preventDefault(); moveActive(1); break;
+      case "ArrowUp": e.preventDefault(); moveActive(-1); break;
+      case "Home": e.preventDefault(); moveActive("first"); break;
+      case "End": e.preventDefault(); moveActive("last"); break;
+      case "Enter":
+      case " ": {
+        // If a control (checkbox, action button) is focused, let it handle the key.
+        if (e.target.closest?.('button, a, input, select, textarea, [role="checkbox"]')) return;
+        if (!activeId) return;
+        e.preventDefault();
+        if (e.key === "Enter") setSelectedMigrationId(activeId);
+        else toggleChecked(activeId);
+        break;
+      }
+      default: break;
+    }
+  }
+
   if (isLoading && migrations.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -214,7 +289,6 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
     );
   }
 
-  const rows = table.getRowModel().rows;
   if (rows.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -224,40 +298,61 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
   }
 
   return (
-    <ScrollArea className="flex-1">
-      <Table style={{ tableLayout: "fixed", width: "100%" }} className={cn(isFetching && "opacity-60 transition-opacity")}>
-        <TableHeader>
-          {table.getHeaderGroups().map((hg) => (
-            <TableRow key={hg.id} className="hover:bg-transparent">
-              {hg.headers.map((h) => (
-                <TableHead key={h.id} style={{ width: h.column.columnDef.size ? `${h.column.columnDef.size}px` : undefined }}>
-                  {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
-                </TableHead>
-              ))}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const m = row.original;
-            const isForeign = foreignNames.has(m.name);
-            const isSelected = selectedMigrationId === m.id;
-            return (
-              <TableRow
-                key={row.id}
-                data-state={isSelected ? "selected" : undefined}
-                className={cn("group h-9", isForeign && "border-l-2 border-l-destructive")}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id} style={{ width: cell.column.columnDef.size ? `${cell.column.columnDef.size}px` : undefined }}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
+    <div
+      ref={gridRef}
+      role="grid"
+      aria-label="Migrations"
+      tabIndex={0}
+      onKeyDown={onGridKeyDown}
+      className="flex-1 min-h-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+    >
+      <ScrollArea className="h-full">
+        <Table style={{ tableLayout: "fixed", width: "100%" }} className={cn(isFetching && "opacity-60 transition-opacity")}>
+          <TableHeader>
+            {table.getHeaderGroups().map((hg) => (
+              <TableRow key={hg.id} className="hover:bg-transparent">
+                {hg.headers.map((h) => (
+                  <TableHead key={h.id} style={{ width: h.column.columnDef.size ? `${h.column.columnDef.size}px` : undefined }}>
+                    {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                  </TableHead>
                 ))}
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </ScrollArea>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const m = row.original;
+              const isForeign = foreignNames.has(m.name);
+              const isSelected = selectedMigrationId === m.id;
+              const isActive = activeId === m.id;
+              return (
+                <TableRow
+                  key={row.id}
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(m.id, el);
+                    else rowRefs.current.delete(m.id);
+                  }}
+                  role="row"
+                  aria-selected={isActive}
+                  onMouseDown={() => setActiveId(m.id)}
+                  data-state={isSelected ? "selected" : undefined}
+                  className={cn(
+                    "group h-9",
+                    isForeign && "border-l-2 border-l-destructive",
+                    isActive && "bg-accent/40 ring-1 ring-inset ring-ring/40"
+                  )}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id} style={{ width: cell.column.columnDef.size ? `${cell.column.columnDef.size}px` : undefined }}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </ScrollArea>
+    </div>
   );
 }
