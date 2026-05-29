@@ -134,6 +134,23 @@ describe("SwitchBranchDialog", () => {
     });
   });
 
+  it("ignores mouse hover so it doesn't hijack the chosen branch", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("feature/foo")).toBeInTheDocument());
+    // Deliberately pick one branch, then sweep the mouse over another.
+    await user.click(screen.getByText("feature/foo"));
+    await user.hover(screen.getByText("origin/release"));
+    const submit = screen.getByRole("button", { name: /switch & update/i });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await user.click(submit);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("switch_branch_with_migrations", {
+        targetBranch: "feature/foo",
+      });
+    });
+  });
+
   it("moves the switch target as the cursor moves through the list", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);

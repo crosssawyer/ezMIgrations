@@ -48,7 +48,7 @@ function BranchChip({ label, tone = "muted" }) {
 function BranchCommandItem({ name, isRemote, isSelected, onSelect }) {
   const Icon = isRemote ? Cloud : GitBranch;
   return (
-    <CommandItem value={name} onSelect={onSelect} className="font-mono text-xs">
+    <CommandItem value={name} onSelect={onSelect} className="font-mono text-xs hover:bg-accent/40">
       <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
       <span className="flex-1 truncate">{name}</span>
       {isRemote && (
@@ -145,6 +145,9 @@ export function SwitchBranchDialog({ onClose }) {
             <Command
               value={selected}
               onValueChange={setSelected}
+              // Hovering must not move the cursor — otherwise mouse motion alone
+              // would re-pick the switch target. Arrow keys and clicks still do.
+              disablePointerSelection
               onKeyDown={(e) => {
                 // cmdk calls this before its own Enter handling and skips that
                 // handling if we preventDefault. So plain Enter switches to the
