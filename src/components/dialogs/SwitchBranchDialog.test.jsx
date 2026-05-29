@@ -111,6 +111,14 @@ describe("SwitchBranchDialog", () => {
     });
   });
 
+  it("focuses the branch filter on open so the list is arrow-navigable", async () => {
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    // Placeholder flips from loading→search, so match either; the input must
+    // be focusable even while branches are still loading.
+    const input = screen.getByPlaceholderText(/loading branches|search branches/i);
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
   it("switches to the highlighted branch when Enter is pressed in the list", async () => {
     const user = userEvent.setup();
     renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);

@@ -157,7 +157,9 @@ export function SwitchBranchDialog({ onClose }) {
               }}
               className="min-h-0 rounded-none border-0 bg-transparent"
             >
-              <CommandInput ref={inputRef} placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
+              {/* Not disabled while loading: a disabled input can't take focus,
+                  which would defeat the on-open autofocus above. */}
+              <CommandInput ref={inputRef} placeholder={isLoading ? "Loading branches…" : "Search branches..."} />
               <CommandList className="max-h-[clamp(200px,42vh,360px)]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
                 {locals.length > 0 && (
