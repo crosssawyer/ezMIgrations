@@ -8,7 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { useUI } from "@/lib/ui-store";
 import { useMigrationSql } from "@/lib/queries";
-import { copyToClipboard } from "@/lib/utils";
+import { useHorizontalResize } from "@/lib/hooks";
+import { cn, copyToClipboard } from "@/lib/utils";
 
 function extractSqlMeta(sql) {
   const m = sql.match(
@@ -20,6 +21,34 @@ function extractSqlMeta(sql) {
   const update = sql.match(/^\s*UPDATE\s+([\w.\[\]]+(?:\.[\w.\[\]]+)*)/i);
   if (update) return { type: "UPDATE", name: update[1].replace(/\[|\]/g, "") };
   return null;
+}
+
+function CopyButton({ text, title = "Copy", className }) {
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className={cn("absolute right-1.5 top-1.5 opacity-50 hover:opacity-100", className)}
+      onClick={(e) => {
+        e.stopPropagation();
+        copyToClipboard(text);
+      }}
+      title={title}
+    >
+      <Copy className="h-3 w-3" />
+    </Button>
+  );
+}
+
+function CodeBlock({ body }) {
+  return (
+    <div className="relative">
+      {body && <CopyButton text={body} />}
+      <pre className="m-0 overflow-x-auto rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
+        <code>{body || "(empty)"}</code>
+      </pre>
+    </div>
+  );
 }
 
 function SqlCard({ statement, index }) {
@@ -46,15 +75,7 @@ function SqlCard({ statement, index }) {
       </button>
       {expanded && (
         <div className="relative border-t border-border">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-            onClick={(e) => { e.stopPropagation(); copyToClipboard(statement.trim()); }}
-            title="Copy SQL"
-          >
-            <Copy className="h-3 w-3" />
-          </Button>
+          <CopyButton text={statement.trim()} title="Copy SQL" />
           <pre className="m-0 max-h-80 overflow-auto bg-background px-3 py-2 font-mono text-xs leading-relaxed">
             <code>{statement.trim()}</code>
           </pre>
@@ -72,8 +93,21 @@ function SqlList({ statements, direction }) {
       </div>
     );
   }
+  const allSql = statements.map((s) => s.trim()).join("\n\n");
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => copyToClipboard(allSql)}
+          title={`Copy all custom SQL in ${direction}`}
+        >
+          <Copy className="h-3 w-3" />
+          Copy all
+        </Button>
+      </div>
       {statements.map((s, i) => (
         <SqlCard key={i} statement={s} index={i} />
       ))}
@@ -81,15 +115,73 @@ function SqlList({ statements, direction }) {
   );
 }
 
+function CountBadge({ count }) {
+  if (!count) return null;
+  return (
+    <Badge variant="primary" size="xs" className="px-1.5">
+      {count}
+    </Badge>
+  );
+}
+
+function Section({ title, count, children }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </span>
+        <CountBadge count={count} />
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// The detail panel shows four views of a migration's SQL. Each is defined once
+// here and rendered both as its own tab and stacked together under the "All"
+// tab, so the two views never drift apart.
+const SQL_SECTIONS = [
+  { value: "up", tab: "Up()", title: "Up()", render: (sql) => <CodeBlock body={sql.up_body} /> },
+  { value: "down", tab: "Down()", title: "Down()", render: (sql) => <CodeBlock body={sql.down_body} /> },
+  {
+    value: "sql-up",
+    tab: "SQL Up",
+    title: "Custom SQL Up",
+    count: (sql) => sql.custom_sql_up?.length,
+    render: (sql) => <SqlList statements={sql.custom_sql_up} direction="Up()" />,
+  },
+  {
+    value: "sql-down",
+    tab: "SQL Down",
+    title: "Custom SQL Down",
+    count: (sql) => sql.custom_sql_down?.length,
+    render: (sql) => <SqlList statements={sql.custom_sql_down} direction="Down()" />,
+  },
+];
+
 export function DetailPanel({ migrations }) {
   const { selectedMigrationId, setSelectedMigrationId } = useUI();
   const migration = migrations.find((m) => m.id === selectedMigrationId);
   const { data: sql, isLoading } = useMigrationSql(migration?.name);
+  const { width, onResizeStart } = useHorizontalResize({
+    initialWidth: 420,
+    minWidth: 360,
+    maxWidth: 1000,
+  });
 
   if (!migration) return null;
 
   return (
-    <div className="flex h-full w-[420px] min-w-[360px] max-w-[50%] flex-col border-l border-border bg-card">
+    <div
+      className="relative flex h-full shrink-0 flex-col border-l border-border bg-card"
+      style={{ width }}
+    >
+      <div
+        onMouseDown={onResizeStart}
+        title="Drag to resize"
+        className="absolute left-0 top-0 z-10 h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40"
+      />
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <div className="font-mono text-[11px] truncate min-w-0">{migration.name}</div>
         <Button size="icon-sm" variant="ghost" onClick={() => setSelectedMigrationId(null)}>
@@ -103,68 +195,39 @@ export function DetailPanel({ migrations }) {
             <span className="text-xs">Loading migration details...</span>
           </div>
         ) : (
-          <Tabs defaultValue="up" className="flex h-full flex-col">
+          <Tabs defaultValue="all" className="flex h-full flex-col">
             <div className="px-4 pt-3">
-              <TabsList>
-                <TabsTrigger value="up">Up()</TabsTrigger>
-                <TabsTrigger value="down">Down()</TabsTrigger>
-                <TabsTrigger value="sql-up" className="gap-1.5">
-                  SQL Up
-                  {sql.custom_sql_up?.length ? (
-                    <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_up.length}</Badge>
-                  ) : null}
-                </TabsTrigger>
-                <TabsTrigger value="sql-down" className="gap-1.5">
-                  SQL Down
-                  {sql.custom_sql_down?.length ? (
-                    <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_down.length}</Badge>
-                  ) : null}
-                </TabsTrigger>
-              </TabsList>
+              <div className="overflow-x-auto pb-0.5">
+                <TabsList>
+                  <TabsTrigger value="all">All</TabsTrigger>
+                  {SQL_SECTIONS.map((s) => (
+                    <TabsTrigger key={s.value} value={s.value} className="gap-1.5">
+                      {s.tab}
+                      <CountBadge count={s.count?.(sql)} />
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
             </div>
-            <ScrollArea className="flex-1 px-4 pb-4">
-              <TabsContent value="up">
-                <div className="relative">
-                  {sql.up_body && (
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copyToClipboard(sql.up_body)}
-                      title="Copy"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </Button>
-                  )}
-                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                    <code>{sql.up_body || "(empty)"}</code>
-                  </pre>
+            {/* Force the Radix viewport's inner wrapper to block: its default
+                display:table shrink-wraps to the widest SQL line, which would
+                otherwise stretch the panel and push the copy buttons off-screen
+                instead of letting each <pre> scroll horizontally. */}
+            <ScrollArea className="flex-1 px-4 pb-4 [&_[data-radix-scroll-area-viewport]>div]:!block">
+              <TabsContent value="all">
+                <div className="flex flex-col gap-5">
+                  {SQL_SECTIONS.map((s) => (
+                    <Section key={s.value} title={s.title} count={s.count?.(sql)}>
+                      {s.render(sql)}
+                    </Section>
+                  ))}
                 </div>
               </TabsContent>
-              <TabsContent value="down">
-                <div className="relative">
-                  {sql.down_body && (
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copyToClipboard(sql.down_body)}
-                      title="Copy"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </Button>
-                  )}
-                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                    <code>{sql.down_body || "(empty)"}</code>
-                  </pre>
-                </div>
-              </TabsContent>
-              <TabsContent value="sql-up">
-                <SqlList statements={sql.custom_sql_up} direction="Up()" />
-              </TabsContent>
-              <TabsContent value="sql-down">
-                <SqlList statements={sql.custom_sql_down} direction="Down()" />
-              </TabsContent>
+              {SQL_SECTIONS.map((s) => (
+                <TabsContent key={s.value} value={s.value}>
+                  {s.render(sql)}
+                </TabsContent>
+              ))}
             </ScrollArea>
           </Tabs>
         )}
