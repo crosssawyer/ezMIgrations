@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { useUI } from "@/lib/ui-store";
 import { useMigrationSql } from "@/lib/queries";
-import { copyToClipboard } from "@/lib/utils";
+import { cn, copyToClipboard } from "@/lib/utils";
 
 function extractSqlMeta(sql) {
   const m = sql.match(
@@ -20,6 +20,34 @@ function extractSqlMeta(sql) {
   const update = sql.match(/^\s*UPDATE\s+([\w.\[\]]+(?:\.[\w.\[\]]+)*)/i);
   if (update) return { type: "UPDATE", name: update[1].replace(/\[|\]/g, "") };
   return null;
+}
+
+function CopyButton({ text, title = "Copy", className }) {
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      className={cn("absolute right-1.5 top-1.5 opacity-50 hover:opacity-100", className)}
+      onClick={(e) => {
+        e.stopPropagation();
+        copyToClipboard(text);
+      }}
+      title={title}
+    >
+      <Copy className="h-3 w-3" />
+    </Button>
+  );
+}
+
+function CodeBlock({ body }) {
+  return (
+    <div className="relative">
+      {body && <CopyButton text={body} />}
+      <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
+        <code>{body || "(empty)"}</code>
+      </pre>
+    </div>
+  );
 }
 
 function SqlCard({ statement, index }) {
@@ -46,15 +74,7 @@ function SqlCard({ statement, index }) {
       </button>
       {expanded && (
         <div className="relative border-t border-border">
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-            onClick={(e) => { e.stopPropagation(); copyToClipboard(statement.trim()); }}
-            title="Copy SQL"
-          >
-            <Copy className="h-3 w-3" />
-          </Button>
+          <CopyButton text={statement.trim()} title="Copy SQL" />
           <pre className="m-0 max-h-80 overflow-auto bg-background px-3 py-2 font-mono text-xs leading-relaxed">
             <code>{statement.trim()}</code>
           </pre>
@@ -72,11 +92,42 @@ function SqlList({ statements, direction }) {
       </div>
     );
   }
+  const allSql = statements.map((s) => s.trim()).join("\n\n");
   return (
     <div className="flex flex-col gap-2">
+      <div className="flex justify-end">
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+          onClick={() => copyToClipboard(allSql)}
+          title={`Copy all custom SQL in ${direction}`}
+        >
+          <Copy className="h-3 w-3" />
+          Copy all
+        </Button>
+      </div>
       {statements.map((s, i) => (
         <SqlCard key={i} statement={s} index={i} />
       ))}
+    </div>
+  );
+}
+
+function Section({ title, count, children }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </span>
+        {count ? (
+          <Badge variant="primary" size="xs" className="px-1.5">
+            {count}
+          </Badge>
+        ) : null}
+      </div>
+      {children}
     </div>
   );
 }
@@ -103,61 +154,50 @@ export function DetailPanel({ migrations }) {
             <span className="text-xs">Loading migration details...</span>
           </div>
         ) : (
-          <Tabs defaultValue="up" className="flex h-full flex-col">
+          <Tabs defaultValue="all" className="flex h-full flex-col">
             <div className="px-4 pt-3">
-              <TabsList>
-                <TabsTrigger value="up">Up()</TabsTrigger>
-                <TabsTrigger value="down">Down()</TabsTrigger>
-                <TabsTrigger value="sql-up" className="gap-1.5">
-                  SQL Up
-                  {sql.custom_sql_up?.length ? (
-                    <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_up.length}</Badge>
-                  ) : null}
-                </TabsTrigger>
-                <TabsTrigger value="sql-down" className="gap-1.5">
-                  SQL Down
-                  {sql.custom_sql_down?.length ? (
-                    <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_down.length}</Badge>
-                  ) : null}
-                </TabsTrigger>
-              </TabsList>
+              <div className="overflow-x-auto pb-0.5">
+                <TabsList>
+                  <TabsTrigger value="all">All</TabsTrigger>
+                  <TabsTrigger value="up">Up()</TabsTrigger>
+                  <TabsTrigger value="down">Down()</TabsTrigger>
+                  <TabsTrigger value="sql-up" className="gap-1.5">
+                    SQL Up
+                    {sql.custom_sql_up?.length ? (
+                      <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_up.length}</Badge>
+                    ) : null}
+                  </TabsTrigger>
+                  <TabsTrigger value="sql-down" className="gap-1.5">
+                    SQL Down
+                    {sql.custom_sql_down?.length ? (
+                      <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_down.length}</Badge>
+                    ) : null}
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </div>
             <ScrollArea className="flex-1 px-4 pb-4">
-              <TabsContent value="up">
-                <div className="relative">
-                  {sql.up_body && (
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copyToClipboard(sql.up_body)}
-                      title="Copy"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </Button>
-                  )}
-                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                    <code>{sql.up_body || "(empty)"}</code>
-                  </pre>
+              <TabsContent value="all">
+                <div className="flex flex-col gap-5">
+                  <Section title="Up()">
+                    <CodeBlock body={sql.up_body} />
+                  </Section>
+                  <Section title="Down()">
+                    <CodeBlock body={sql.down_body} />
+                  </Section>
+                  <Section title="Custom SQL Up" count={sql.custom_sql_up?.length}>
+                    <SqlList statements={sql.custom_sql_up} direction="Up()" />
+                  </Section>
+                  <Section title="Custom SQL Down" count={sql.custom_sql_down?.length}>
+                    <SqlList statements={sql.custom_sql_down} direction="Down()" />
+                  </Section>
                 </div>
               </TabsContent>
+              <TabsContent value="up">
+                <CodeBlock body={sql.up_body} />
+              </TabsContent>
               <TabsContent value="down">
-                <div className="relative">
-                  {sql.down_body && (
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      className="absolute right-1.5 top-1.5 opacity-50 hover:opacity-100"
-                      onClick={() => copyToClipboard(sql.down_body)}
-                      title="Copy"
-                    >
-                      <Copy className="h-3 w-3" />
-                    </Button>
-                  )}
-                  <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
-                    <code>{sql.down_body || "(empty)"}</code>
-                  </pre>
-                </div>
+                <CodeBlock body={sql.down_body} />
               </TabsContent>
               <TabsContent value="sql-up">
                 <SqlList statements={sql.custom_sql_up} direction="Up()" />
