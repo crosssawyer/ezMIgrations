@@ -43,7 +43,7 @@ function CodeBlock({ body }) {
   return (
     <div className="relative">
       {body && <CopyButton text={body} />}
-      <pre className="m-0 rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
+      <pre className="m-0 overflow-x-auto rounded-md border border-border bg-background p-3 font-mono text-xs leading-relaxed">
         <code>{body || "(empty)"}</code>
       </pre>
     </div>
