@@ -86,8 +86,9 @@ function AppShell() {
 
   // Keep the latest handler in a ref so the document listener can subscribe
   // once for the app's lifetime instead of re-binding on every UI state change.
+  // The ref is refreshed in a commit-phase effect (below) to keep render pure.
   const onKeyRef = React.useRef(null);
-  onKeyRef.current = function onKey(e) {
+  function onKey(e) {
     const mod = e.ctrlKey || e.metaKey;
     const shift = e.shiftKey;
     const key = e.key.toLowerCase();
@@ -107,7 +108,7 @@ function AppShell() {
     // (must be up, to split ⌘F from ⌘⇧F) / omitted (don't care). `scope` is
     // "always" | "noInput" | "mainView" (mainView also implies not-in-input).
     const BINDINGS = [
-      { key: "escape", scope: "always", run: closeTopLayer },
+      { key: "escape", scope: "always", requiresProject: false, run: closeTopLayer },
       { mod: true, key: "n", scope: "mainView", run: () => ui.openDialog("newMigration") },
       { mod: true, key: "r", scope: "noInput", run: () => qc.invalidateQueries({ queryKey: queryKeys.migrations }) },
       { mod: true, shift: true, key: "f", scope: "always", run: () => !fetchRemote.isPending && fetchRemote.mutate() },
@@ -123,12 +124,18 @@ function AppShell() {
       if (b.shift !== undefined && b.shift !== shift) continue;
       if (b.scope === "noInput" && inInput) continue;
       if (b.scope === "mainView" && (inInput || !inMainView)) continue;
-      if (b.key !== "escape" && !project) return;
+      if ((b.requiresProject ?? true) && !project) return;
       if (b.mod) e.preventDefault();
       b.run();
       return;
     }
-  };
+  }
+
+  // Refresh the ref every commit so the once-bound listener always calls the
+  // latest closure (fresh `ui`/`project`/mutation state) without re-binding.
+  React.useEffect(() => {
+    onKeyRef.current = onKey;
+  });
 
   React.useEffect(() => {
     const handler = (e) => onKeyRef.current?.(e);

@@ -23,6 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/lib/ui-store";
+import { useGridKeyboardNav } from "@/lib/hooks";
 import { useApplyTo, useRemoveLastOrForce } from "./row-actions";
 import { useSetStable } from "@/lib/mutations";
 
@@ -199,76 +200,16 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
 
   const rows = table.getRowModel().rows;
   const visibleIds = rows.map((r) => r.original.id);
-  const visibleKey = visibleIds.join("|");
 
-  // Keyboard navigation: `activeId` is a focus cursor, independent of the
-  // detail panel (which `selectedMigrationId` drives). Arrows move the cursor,
-  // Enter opens its detail, Space toggles its squash checkbox.
-  const gridRef = React.useRef(null);
-  const rowRefs = React.useRef(new Map());
-  const didAutoFocus = React.useRef(false);
-  const [activeId, setActiveId] = React.useState(null);
-
-  // Keep the cursor pointing at a visible row as filtering/sorting changes.
-  React.useEffect(() => {
-    if (visibleIds.length === 0) {
-      setActiveId(null);
-      return;
-    }
-    setActiveId((cur) => {
-      if (cur && visibleIds.includes(cur)) return cur;
-      if (selectedMigrationId && visibleIds.includes(selectedMigrationId)) return selectedMigrationId;
-      return visibleIds[0];
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleKey, selectedMigrationId]);
-
-  // Focus the grid once it first has rows so arrows work without a click —
-  // but never steal focus from an input the user is already typing in.
-  React.useEffect(() => {
-    if (didAutoFocus.current || visibleIds.length === 0 || !gridRef.current) return;
-    const active = document.activeElement;
-    const inInput = active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA");
-    if (!inInput && (!active || active === document.body)) {
-      gridRef.current.focus({ preventScroll: true });
-    }
-    didAutoFocus.current = true;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [visibleKey]);
-
-  function moveActive(target) {
-    if (visibleIds.length === 0) return;
-    const curIdx = Math.max(0, visibleIds.indexOf(activeId));
-    const nextIdx =
-      target === "first" ? 0
-      : target === "last" ? visibleIds.length - 1
-      : Math.min(visibleIds.length - 1, Math.max(0, curIdx + target));
-    const nextId = visibleIds[nextIdx];
-    setActiveId(nextId);
-    rowRefs.current.get(nextId)?.scrollIntoView({ block: "nearest" });
-    // When the panel is open, let it follow the cursor (master-detail).
-    if (selectedMigrationId != null) setSelectedMigrationId(nextId);
-  }
-
-  function onGridKeyDown(e) {
-    switch (e.key) {
-      case "ArrowDown": e.preventDefault(); moveActive(1); break;
-      case "ArrowUp": e.preventDefault(); moveActive(-1); break;
-      case "Home": e.preventDefault(); moveActive("first"); break;
-      case "End": e.preventDefault(); moveActive("last"); break;
-      case "Enter":
-      case " ": {
-        // If a control (checkbox, action button) is focused, let it handle the key.
-        if (e.target.closest?.('button, a, input, select, textarea, [role="checkbox"]')) return;
-        if (!activeId) return;
-        e.preventDefault();
-        if (e.key === "Enter") setSelectedMigrationId(activeId);
-        else toggleChecked(activeId);
-        break;
-      }
-      default: break;
-    }
-  }
+  // `activeId` is a keyboard focus cursor, independent of the detail panel
+  // (which `selectedMigrationId` drives): arrows move it, Enter opens its
+  // detail, Space toggles its squash checkbox.
+  const { activeId, setActiveId, registerRow, gridProps } = useGridKeyboardNav({
+    ids: visibleIds,
+    selectedId: selectedMigrationId,
+    onSelect: setSelectedMigrationId,
+    onToggle: toggleChecked,
+  });
 
   if (isLoading && migrations.length === 0) {
     return (
@@ -297,11 +238,9 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
 
   return (
     <div
-      ref={gridRef}
+      {...gridProps}
       role="group"
       aria-label="Migrations"
-      tabIndex={0}
-      onKeyDown={onGridKeyDown}
       className="flex-1 min-h-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
     >
       <ScrollArea className="h-full">
@@ -326,10 +265,7 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
               return (
                 <TableRow
                   key={row.id}
-                  ref={(el) => {
-                    if (el) rowRefs.current.set(m.id, el);
-                    else rowRefs.current.delete(m.id);
-                  }}
+                  ref={registerRow(m.id)}
                   onMouseDown={() => setActiveId(m.id)}
                   data-state={isSelected ? "selected" : undefined}
                   data-active={isActive ? "true" : undefined}
