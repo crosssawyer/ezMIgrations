@@ -34,7 +34,7 @@ function renderTable() {
 }
 
 function activeRowName() {
-  const row = document.querySelector('[role="row"][aria-selected="true"]');
+  const row = document.querySelector('[data-active="true"]');
   return row ? within(row).getByRole("button", { name: /\d+_/ }).textContent : null;
 }
 
@@ -50,7 +50,7 @@ describe("MigrationsTable keyboard navigation", () => {
 
   it("moves the active cursor with ArrowDown / ArrowUp, clamped at the ends", () => {
     renderTable();
-    const grid = screen.getByRole("grid", { name: "Migrations" });
+    const grid = screen.getByRole("group", { name: "Migrations" });
 
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(activeRowName()).toBe("20240202_AddUsers");
@@ -68,7 +68,7 @@ describe("MigrationsTable keyboard navigation", () => {
 
   it("jumps to the last / first row with End / Home", () => {
     renderTable();
-    const grid = screen.getByRole("grid", { name: "Migrations" });
+    const grid = screen.getByRole("group", { name: "Migrations" });
 
     fireEvent.keyDown(grid, { key: "End" });
     expect(activeRowName()).toBe("20240303_AddOrders");
@@ -79,23 +79,23 @@ describe("MigrationsTable keyboard navigation", () => {
 
   it("opens the active row's detail on Enter (row becomes selected)", () => {
     renderTable();
-    const grid = screen.getByRole("grid", { name: "Migrations" });
+    const grid = screen.getByRole("group", { name: "Migrations" });
 
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     fireEvent.keyDown(grid, { key: "Enter" });
 
-    const selected = document.querySelector('[role="row"][data-state="selected"]');
+    const selected = document.querySelector('[data-state="selected"]');
     expect(selected).not.toBeNull();
     expect(within(selected).getByText("20240202_AddUsers")).toBeInTheDocument();
   });
 
   it("toggles the active row's squash checkbox on Space", () => {
     renderTable();
-    const grid = screen.getByRole("grid", { name: "Migrations" });
+    const grid = screen.getByRole("group", { name: "Migrations" });
 
     const checkbox = () =>
       within(
-        document.querySelector('[role="row"][aria-selected="true"]')
+        document.querySelector('[data-active="true"]')
       ).getByRole("checkbox");
 
     expect(checkbox()).toHaveAttribute("data-state", "unchecked");

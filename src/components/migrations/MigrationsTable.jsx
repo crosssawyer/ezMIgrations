@@ -298,7 +298,7 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
   return (
     <div
       ref={gridRef}
-      role="grid"
+      role="group"
       aria-label="Migrations"
       tabIndex={0}
       onKeyDown={onGridKeyDown}
@@ -330,10 +330,9 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
                     if (el) rowRefs.current.set(m.id, el);
                     else rowRefs.current.delete(m.id);
                   }}
-                  role="row"
-                  aria-selected={isActive}
                   onMouseDown={() => setActiveId(m.id)}
                   data-state={isSelected ? "selected" : undefined}
+                  data-active={isActive ? "true" : undefined}
                   className={cn(
                     "group h-9",
                     isForeign && "border-l-2 border-l-destructive",
