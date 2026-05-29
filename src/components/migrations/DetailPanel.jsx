@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Spinner } from "@/components/ui/spinner";
 import { useUI } from "@/lib/ui-store";
 import { useMigrationSql } from "@/lib/queries";
+import { useHorizontalResize } from "@/lib/hooks";
 import { cn, copyToClipboard } from "@/lib/utils";
 
 function extractSqlMeta(sql) {
@@ -163,11 +164,24 @@ export function DetailPanel({ migrations }) {
   const { selectedMigrationId, setSelectedMigrationId } = useUI();
   const migration = migrations.find((m) => m.id === selectedMigrationId);
   const { data: sql, isLoading } = useMigrationSql(migration?.name);
+  const { width, onResizeStart } = useHorizontalResize({
+    initialWidth: 420,
+    minWidth: 360,
+    maxWidth: 1000,
+  });
 
   if (!migration) return null;
 
   return (
-    <div className="flex h-full w-[420px] min-w-[360px] max-w-[50%] flex-col border-l border-border bg-card">
+    <div
+      className="relative flex h-full shrink-0 flex-col border-l border-border bg-card"
+      style={{ width }}
+    >
+      <div
+        onMouseDown={onResizeStart}
+        title="Drag to resize"
+        className="absolute left-0 top-0 z-10 h-full w-1 -translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-primary/40"
+      />
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <div className="font-mono text-[11px] truncate min-w-0">{migration.name}</div>
         <Button size="icon-sm" variant="ghost" onClick={() => setSelectedMigrationId(null)}>
@@ -195,7 +209,11 @@ export function DetailPanel({ migrations }) {
                 </TabsList>
               </div>
             </div>
-            <ScrollArea className="flex-1 px-4 pb-4">
+            {/* Force the Radix viewport's inner wrapper to block: its default
+                display:table shrink-wraps to the widest SQL line, which would
+                otherwise stretch the panel and push the copy buttons off-screen
+                instead of letting each <pre> scroll horizontally. */}
+            <ScrollArea className="flex-1 px-4 pb-4 [&_[data-radix-scroll-area-viewport]>div]:!block">
               <TabsContent value="all">
                 <div className="flex flex-col gap-5">
                   {SQL_SECTIONS.map((s) => (
