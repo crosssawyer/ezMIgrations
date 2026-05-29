@@ -23,6 +23,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useUI } from "@/lib/ui-store";
+import { useGridKeyboardNav } from "@/lib/hooks";
 import { useApplyTo, useRemoveLastOrForce } from "./row-actions";
 import { useSetStable } from "@/lib/mutations";
 
@@ -197,6 +198,19 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
     getSortedRowModel: getSortedRowModel(),
   });
 
+  const rows = table.getRowModel().rows;
+  const visibleIds = rows.map((r) => r.original.id);
+
+  // `activeId` is a keyboard focus cursor, independent of the detail panel
+  // (which `selectedMigrationId` drives): arrows move it, Enter opens its
+  // detail, Space toggles its squash checkbox.
+  const { activeId, setActiveId, registerRow, gridProps } = useGridKeyboardNav({
+    ids: visibleIds,
+    selectedId: selectedMigrationId,
+    onSelect: setSelectedMigrationId,
+    onToggle: toggleChecked,
+  });
+
   if (isLoading && migrations.length === 0) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -214,7 +228,6 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
     );
   }
 
-  const rows = table.getRowModel().rows;
   if (rows.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
@@ -224,40 +237,55 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
   }
 
   return (
-    <ScrollArea className="flex-1">
-      <Table style={{ tableLayout: "fixed", width: "100%" }} className={cn(isFetching && "opacity-60 transition-opacity")}>
-        <TableHeader>
-          {table.getHeaderGroups().map((hg) => (
-            <TableRow key={hg.id} className="hover:bg-transparent">
-              {hg.headers.map((h) => (
-                <TableHead key={h.id} style={{ width: h.column.columnDef.size ? `${h.column.columnDef.size}px` : undefined }}>
-                  {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
-                </TableHead>
-              ))}
-            </TableRow>
-          ))}
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => {
-            const m = row.original;
-            const isForeign = foreignNames.has(m.name);
-            const isSelected = selectedMigrationId === m.id;
-            return (
-              <TableRow
-                key={row.id}
-                data-state={isSelected ? "selected" : undefined}
-                className={cn("group h-9", isForeign && "border-l-2 border-l-destructive")}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id} style={{ width: cell.column.columnDef.size ? `${cell.column.columnDef.size}px` : undefined }}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
+    <div
+      {...gridProps}
+      role="group"
+      aria-label="Migrations"
+      className="flex-1 min-h-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-ring/40"
+    >
+      <ScrollArea className="h-full">
+        <Table style={{ tableLayout: "fixed", width: "100%" }} className={cn(isFetching && "opacity-60 transition-opacity")}>
+          <TableHeader>
+            {table.getHeaderGroups().map((hg) => (
+              <TableRow key={hg.id} className="hover:bg-transparent">
+                {hg.headers.map((h) => (
+                  <TableHead key={h.id} style={{ width: h.column.columnDef.size ? `${h.column.columnDef.size}px` : undefined }}>
+                    {h.isPlaceholder ? null : flexRender(h.column.columnDef.header, h.getContext())}
+                  </TableHead>
                 ))}
               </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </ScrollArea>
+            ))}
+          </TableHeader>
+          <TableBody>
+            {rows.map((row) => {
+              const m = row.original;
+              const isForeign = foreignNames.has(m.name);
+              const isSelected = selectedMigrationId === m.id;
+              const isActive = activeId === m.id;
+              return (
+                <TableRow
+                  key={row.id}
+                  ref={registerRow(m.id)}
+                  onMouseDown={() => setActiveId(m.id)}
+                  data-state={isSelected ? "selected" : undefined}
+                  data-active={isActive ? "true" : undefined}
+                  className={cn(
+                    "group h-9",
+                    isForeign && "border-l-2 border-l-destructive",
+                    isActive && "bg-accent/40 ring-1 ring-inset ring-ring/40"
+                  )}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id} style={{ width: cell.column.columnDef.size ? `${cell.column.columnDef.size}px` : undefined }}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </ScrollArea>
+    </div>
   );
 }

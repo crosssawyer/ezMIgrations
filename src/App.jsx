@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { UIProvider, useUI } from "@/lib/ui-store";
 import { useProject, usePreferences, queryKeys } from "@/lib/queries";
+import { useUpdateDatabase, useFetchRemote } from "@/lib/mutations";
 import { listen, invoke } from "@/lib/tauri";
 import { useRefreshOnVisible } from "@/lib/hooks";
 import { Spinner } from "@/components/ui/spinner";
@@ -26,6 +27,8 @@ function AppShell() {
   const { data: preferences } = usePreferences();
   const qc = useQueryClient();
   const ui = useUI();
+  const updateDb = useUpdateDatabase();
+  const fetchRemote = useFetchRemote();
 
   React.useEffect(() => {
     let cancelled = false;
@@ -81,42 +84,64 @@ function AppShell() {
     qc.invalidateQueries({ queryKey: queryKeys.migrations });
   }, { enabled: !!project });
 
-  React.useEffect(() => {
-    function onKey(e) {
-      const mod = e.ctrlKey || e.metaKey;
-      const tag = document.activeElement?.tagName;
-      const inInput = tag === "INPUT" || tag === "TEXTAREA";
+  // Keep the latest handler in a ref so the document listener can subscribe
+  // once for the app's lifetime instead of re-binding on every UI state change.
+  // The ref is refreshed in a commit-phase effect (below) to keep render pure.
+  const onKeyRef = React.useRef(null);
+  function onKey(e) {
+    const mod = e.ctrlKey || e.metaKey;
+    const shift = e.shiftKey;
+    const key = e.key.toLowerCase();
+    const tag = document.activeElement?.tagName;
+    const inInput = tag === "INPUT" || tag === "TEXTAREA";
+    const inMainView = !ui.dialog && !ui.settingsOpen && !ui.hotkeysOpen;
 
-      if (e.key === "Escape") {
-        if (ui.hotkeysOpen) ui.setHotkeysOpen(false);
-        else if (ui.dialog) ui.closeDialog();
-        else if (ui.settingsOpen) ui.setSettingsOpen(false);
-        else if (ui.selectedMigrationId) ui.setSelectedMigrationId(null);
-        return;
-      }
-      if (!project) return;
-      if (mod && !inInput && (e.key === "n" || e.key === "N")) {
-        e.preventDefault();
-        ui.openDialog("newMigration");
-        return;
-      }
-      if (mod && !inInput && (e.key === "r" || e.key === "R")) {
-        e.preventDefault();
-        qc.invalidateQueries({ queryKey: queryKeys.migrations });
-        return;
-      }
-      if (mod && (e.key === "f" || e.key === "F")) {
-        e.preventDefault();
-        document.querySelector('[data-search-input]')?.focus();
-        return;
-      }
-      if (e.key === "?" && !inInput) {
-        ui.setHotkeysOpen((v) => !v);
-      }
+    const closeTopLayer = () => {
+      if (ui.hotkeysOpen) ui.setHotkeysOpen(false);
+      else if (ui.dialog) ui.closeDialog();
+      else if (ui.settingsOpen) ui.setSettingsOpen(false);
+      else if (ui.selectedMigrationId) ui.setSelectedMigrationId(null);
+    };
+
+    // Each row reads as: which key, the modifier expectation, where it's
+    // allowed to fire, and what it does. `shift` is true (required) / false
+    // (must be up, to split ⌘F from ⌘⇧F) / omitted (don't care). `scope` is
+    // "always" | "noInput" | "mainView" (mainView also implies not-in-input).
+    const BINDINGS = [
+      { key: "escape", scope: "always", requiresProject: false, run: closeTopLayer },
+      { mod: true, key: "n", scope: "mainView", run: () => ui.openDialog("newMigration") },
+      { mod: true, key: "r", scope: "noInput", run: () => qc.invalidateQueries({ queryKey: queryKeys.migrations }) },
+      { mod: true, shift: true, key: "f", scope: "always", run: () => !fetchRemote.isPending && fetchRemote.mutate() },
+      { mod: true, shift: false, key: "f", scope: "always", run: () => document.querySelector("[data-search-input]")?.focus() },
+      { mod: true, key: "u", scope: "mainView", run: () => !updateDb.isPending && updateDb.mutate({}) },
+      { mod: true, key: "b", scope: "mainView", run: () => ui.openDialog("switchBranch") },
+      { key: "?", scope: "noInput", run: () => ui.setHotkeysOpen((v) => !v) },
+    ];
+
+    for (const b of BINDINGS) {
+      if (b.key !== key) continue;
+      if ((b.mod ?? false) !== mod) continue;
+      if (b.shift !== undefined && b.shift !== shift) continue;
+      if (b.scope === "noInput" && inInput) continue;
+      if (b.scope === "mainView" && (inInput || !inMainView)) continue;
+      if ((b.requiresProject ?? true) && !project) return;
+      if (b.mod) e.preventDefault();
+      b.run();
+      return;
     }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [ui, project, qc]);
+  }
+
+  // Refresh the ref every commit so the once-bound listener always calls the
+  // latest closure (fresh `ui`/`project`/mutation state) without re-binding.
+  React.useEffect(() => {
+    onKeyRef.current = onKey;
+  });
+
+  React.useEffect(() => {
+    const handler = (e) => onKeyRef.current?.(e);
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, []);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground overflow-hidden">

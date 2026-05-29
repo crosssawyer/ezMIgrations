@@ -110,4 +110,62 @@ describe("SwitchBranchDialog", () => {
       });
     });
   });
+
+  it("focuses the branch filter on open so the list is arrow-navigable", async () => {
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    // Placeholder flips from loading→search, so match either; the input must
+    // be focusable even while branches are still loading.
+    const input = screen.getByPlaceholderText(/loading branches|search branches/i);
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
+  it("switches to the highlighted branch when Enter is pressed in the list", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("feature/foo")).toBeInTheDocument());
+    const input = screen.getByPlaceholderText("Search branches...");
+    await user.click(input);
+    await user.type(input, "feature");
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("switch_branch_with_migrations", {
+        targetBranch: "feature/foo",
+      });
+    });
+  });
+
+  it("ignores mouse hover so it doesn't hijack the chosen branch", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("feature/foo")).toBeInTheDocument());
+    // Deliberately pick one branch, then sweep the mouse over another.
+    await user.click(screen.getByText("feature/foo"));
+    await user.hover(screen.getByText("origin/release"));
+    const submit = screen.getByRole("button", { name: /switch & update/i });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await user.click(submit);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("switch_branch_with_migrations", {
+        targetBranch: "feature/foo",
+      });
+    });
+  });
+
+  it("moves the switch target as the cursor moves through the list", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<SwitchBranchDialog onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("feature/foo")).toBeInTheDocument());
+    const input = screen.getByPlaceholderText("Search branches...");
+    await user.click(input);
+    // First item (main) auto-highlights; arrowing down moves the target.
+    await user.keyboard("{ArrowDown}");
+    const submit = screen.getByRole("button", { name: /switch & update/i });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await user.click(submit);
+    await waitFor(() => {
+      expect(invoke).toHaveBeenCalledWith("switch_branch_with_migrations", {
+        targetBranch: "feature/foo",
+      });
+    });
+  });
 });
