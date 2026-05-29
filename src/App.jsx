@@ -89,54 +89,44 @@ function AppShell() {
   const onKeyRef = React.useRef(null);
   onKeyRef.current = function onKey(e) {
     const mod = e.ctrlKey || e.metaKey;
-    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const shift = e.shiftKey;
+    const key = e.key.toLowerCase();
     const tag = document.activeElement?.tagName;
     const inInput = tag === "INPUT" || tag === "TEXTAREA";
-    // Whole-app actions should only fire from the main view, not while a
-    // dialog/settings/help surface is in front.
     const inMainView = !ui.dialog && !ui.settingsOpen && !ui.hotkeysOpen;
 
-    if (e.key === "Escape") {
+    const closeTopLayer = () => {
       if (ui.hotkeysOpen) ui.setHotkeysOpen(false);
       else if (ui.dialog) ui.closeDialog();
       else if (ui.settingsOpen) ui.setSettingsOpen(false);
       else if (ui.selectedMigrationId) ui.setSelectedMigrationId(null);
+    };
+
+    // Each row reads as: which key, the modifier expectation, where it's
+    // allowed to fire, and what it does. `shift` is true (required) / false
+    // (must be up, to split ⌘F from ⌘⇧F) / omitted (don't care). `scope` is
+    // "always" | "noInput" | "mainView" (mainView also implies not-in-input).
+    const BINDINGS = [
+      { key: "escape", scope: "always", run: closeTopLayer },
+      { mod: true, key: "n", scope: "mainView", run: () => ui.openDialog("newMigration") },
+      { mod: true, key: "r", scope: "noInput", run: () => qc.invalidateQueries({ queryKey: queryKeys.migrations }) },
+      { mod: true, shift: true, key: "f", scope: "always", run: () => !fetchRemote.isPending && fetchRemote.mutate() },
+      { mod: true, shift: false, key: "f", scope: "always", run: () => document.querySelector("[data-search-input]")?.focus() },
+      { mod: true, key: "u", scope: "mainView", run: () => !updateDb.isPending && updateDb.mutate({}) },
+      { mod: true, key: "b", scope: "mainView", run: () => ui.openDialog("switchBranch") },
+      { key: "?", scope: "noInput", run: () => ui.setHotkeysOpen((v) => !v) },
+    ];
+
+    for (const b of BINDINGS) {
+      if (b.key !== key) continue;
+      if ((b.mod ?? false) !== mod) continue;
+      if (b.shift !== undefined && b.shift !== shift) continue;
+      if (b.scope === "noInput" && inInput) continue;
+      if (b.scope === "mainView" && (inInput || !inMainView)) continue;
+      if (b.key !== "escape" && !project) return;
+      if (b.mod) e.preventDefault();
+      b.run();
       return;
-    }
-    if (!project) return;
-    if (mod && !inInput && inMainView && key === "n") {
-      e.preventDefault();
-      ui.openDialog("newMigration");
-      return;
-    }
-    if (mod && !inInput && key === "r") {
-      e.preventDefault();
-      qc.invalidateQueries({ queryKey: queryKeys.migrations });
-      return;
-    }
-    // Fetch remote branches — also works inside the branch dialog.
-    if (mod && e.shiftKey && key === "f") {
-      e.preventDefault();
-      if (!fetchRemote.isPending) fetchRemote.mutate();
-      return;
-    }
-    if (mod && !e.shiftKey && key === "f") {
-      e.preventDefault();
-      document.querySelector('[data-search-input]')?.focus();
-      return;
-    }
-    if (mod && !inInput && inMainView && key === "u") {
-      e.preventDefault();
-      if (!updateDb.isPending) updateDb.mutate({});
-      return;
-    }
-    if (mod && !inInput && inMainView && key === "b") {
-      e.preventDefault();
-      ui.openDialog("switchBranch");
-      return;
-    }
-    if (e.key === "?" && !inInput) {
-      ui.setHotkeysOpen((v) => !v);
     }
   };
 
