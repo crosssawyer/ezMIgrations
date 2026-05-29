@@ -238,18 +238,16 @@ export function MigrationsTable({ migrations, isLoading, isFetching, project, fo
 
   function moveActive(target) {
     if (visibleIds.length === 0) return;
-    setActiveId((cur) => {
-      const curIdx = Math.max(0, visibleIds.indexOf(cur));
-      const nextIdx =
-        target === "first" ? 0
-        : target === "last" ? visibleIds.length - 1
-        : Math.min(visibleIds.length - 1, Math.max(0, curIdx + target));
-      const nextId = visibleIds[nextIdx];
-      rowRefs.current.get(nextId)?.scrollIntoView({ block: "nearest" });
-      // When the panel is open, let it follow the cursor (master-detail).
-      if (selectedMigrationId != null) setSelectedMigrationId(nextId);
-      return nextId;
-    });
+    const curIdx = Math.max(0, visibleIds.indexOf(activeId));
+    const nextIdx =
+      target === "first" ? 0
+      : target === "last" ? visibleIds.length - 1
+      : Math.min(visibleIds.length - 1, Math.max(0, curIdx + target));
+    const nextId = visibleIds[nextIdx];
+    setActiveId(nextId);
+    rowRefs.current.get(nextId)?.scrollIntoView({ block: "nearest" });
+    // When the panel is open, let it follow the cursor (master-detail).
+    if (selectedMigrationId != null) setSelectedMigrationId(nextId);
   }
 
   function onGridKeyDown(e) {
