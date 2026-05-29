@@ -102,7 +102,15 @@ export function SwitchBranchDialog({ onClose }) {
           </DialogDescription>
         </DialogHeader>
 
-        <form onSubmit={onSubmit} className="flex flex-col min-h-0">
+        <form
+          onSubmit={onSubmit}
+          onKeyDown={(e) => {
+            // ⌘/Ctrl+Enter confirms the highlighted branch from anywhere in
+            // the dialog (the command list owns plain Enter for selection).
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit(e);
+          }}
+          className="flex flex-col min-h-0"
+        >
           <div className="shrink-0 flex items-center gap-2 px-5 pb-3 min-w-0">
             <BranchChip label={currentBranch || "current"} tone="muted" />
             <ArrowRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />

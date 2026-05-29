@@ -9,11 +9,15 @@ import { useUI } from "@/lib/ui-store";
 
 const SHORTCUTS = [
   ["⌘ N", "New migration"],
+  ["⌘ U", "Update database"],
+  ["⌘ B", "Switch branch"],
+  ["⌘ ⇧ F", "Fetch remote branches"],
   ["⌘ R", "Refresh migrations"],
   ["⌘ F", "Focus search / filter"],
   ["↑ ↓", "Navigate migrations"],
   ["Enter", "Open details"],
   ["Space", "Toggle selection"],
+  ["⌘ ↵", "Confirm branch switch"],
   ["Esc", "Close panel / dialog"],
   ["?", "Toggle this help"],
 ];

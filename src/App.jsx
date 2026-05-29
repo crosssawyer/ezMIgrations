@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { UIProvider, useUI } from "@/lib/ui-store";
 import { useProject, usePreferences, queryKeys } from "@/lib/queries";
+import { useUpdateDatabase, useFetchRemote } from "@/lib/mutations";
 import { listen, invoke } from "@/lib/tauri";
 import { useRefreshOnVisible } from "@/lib/hooks";
 import { Spinner } from "@/components/ui/spinner";
@@ -26,6 +27,8 @@ function AppShell() {
   const { data: preferences } = usePreferences();
   const qc = useQueryClient();
   const ui = useUI();
+  const updateDb = useUpdateDatabase();
+  const fetchRemote = useFetchRemote();
 
   React.useEffect(() => {
     let cancelled = false;
@@ -84,8 +87,12 @@ function AppShell() {
   React.useEffect(() => {
     function onKey(e) {
       const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
       const tag = document.activeElement?.tagName;
       const inInput = tag === "INPUT" || tag === "TEXTAREA";
+      // Whole-app actions should only fire from the main view, not while a
+      // dialog/settings/help surface is in front.
+      const inMainView = !ui.dialog && !ui.settingsOpen && !ui.hotkeysOpen;
 
       if (e.key === "Escape") {
         if (ui.hotkeysOpen) ui.setHotkeysOpen(false);
@@ -95,19 +102,35 @@ function AppShell() {
         return;
       }
       if (!project) return;
-      if (mod && !inInput && (e.key === "n" || e.key === "N")) {
+      if (mod && !inInput && inMainView && key === "n") {
         e.preventDefault();
         ui.openDialog("newMigration");
         return;
       }
-      if (mod && !inInput && (e.key === "r" || e.key === "R")) {
+      if (mod && !inInput && key === "r") {
         e.preventDefault();
         qc.invalidateQueries({ queryKey: queryKeys.migrations });
         return;
       }
-      if (mod && (e.key === "f" || e.key === "F")) {
+      // Fetch remote branches — also works inside the branch dialog.
+      if (mod && e.shiftKey && key === "f") {
+        e.preventDefault();
+        if (!fetchRemote.isPending) fetchRemote.mutate();
+        return;
+      }
+      if (mod && !e.shiftKey && key === "f") {
         e.preventDefault();
         document.querySelector('[data-search-input]')?.focus();
+        return;
+      }
+      if (mod && !inInput && inMainView && key === "u") {
+        e.preventDefault();
+        if (!updateDb.isPending) updateDb.mutate({});
+        return;
+      }
+      if (mod && !inInput && inMainView && key === "b") {
+        e.preventDefault();
+        ui.openDialog("switchBranch");
         return;
       }
       if (e.key === "?" && !inInput) {
@@ -116,7 +139,7 @@ function AppShell() {
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [ui, project, qc]);
+  }, [ui, project, qc, updateDb.mutate, updateDb.isPending, fetchRemote.mutate, fetchRemote.isPending]);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground overflow-hidden">
