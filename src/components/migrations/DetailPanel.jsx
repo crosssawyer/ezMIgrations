@@ -114,6 +114,15 @@ function SqlList({ statements, direction }) {
   );
 }
 
+function CountBadge({ count }) {
+  if (!count) return null;
+  return (
+    <Badge variant="primary" size="xs" className="px-1.5">
+      {count}
+    </Badge>
+  );
+}
+
 function Section({ title, count, children }) {
   return (
     <div className="flex flex-col gap-2">
@@ -121,16 +130,34 @@ function Section({ title, count, children }) {
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {title}
         </span>
-        {count ? (
-          <Badge variant="primary" size="xs" className="px-1.5">
-            {count}
-          </Badge>
-        ) : null}
+        <CountBadge count={count} />
       </div>
       {children}
     </div>
   );
 }
+
+// The detail panel shows four views of a migration's SQL. Each is defined once
+// here and rendered both as its own tab and stacked together under the "All"
+// tab, so the two views never drift apart.
+const SQL_SECTIONS = [
+  { value: "up", tab: "Up()", title: "Up()", render: (sql) => <CodeBlock body={sql.up_body} /> },
+  { value: "down", tab: "Down()", title: "Down()", render: (sql) => <CodeBlock body={sql.down_body} /> },
+  {
+    value: "sql-up",
+    tab: "SQL Up",
+    title: "Custom SQL Up",
+    count: (sql) => sql.custom_sql_up?.length,
+    render: (sql) => <SqlList statements={sql.custom_sql_up} direction="Up()" />,
+  },
+  {
+    value: "sql-down",
+    tab: "SQL Down",
+    title: "Custom SQL Down",
+    count: (sql) => sql.custom_sql_down?.length,
+    render: (sql) => <SqlList statements={sql.custom_sql_down} direction="Down()" />,
+  },
+];
 
 export function DetailPanel({ migrations }) {
   const { selectedMigrationId, setSelectedMigrationId } = useUI();
@@ -159,52 +186,30 @@ export function DetailPanel({ migrations }) {
               <div className="overflow-x-auto pb-0.5">
                 <TabsList>
                   <TabsTrigger value="all">All</TabsTrigger>
-                  <TabsTrigger value="up">Up()</TabsTrigger>
-                  <TabsTrigger value="down">Down()</TabsTrigger>
-                  <TabsTrigger value="sql-up" className="gap-1.5">
-                    SQL Up
-                    {sql.custom_sql_up?.length ? (
-                      <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_up.length}</Badge>
-                    ) : null}
-                  </TabsTrigger>
-                  <TabsTrigger value="sql-down" className="gap-1.5">
-                    SQL Down
-                    {sql.custom_sql_down?.length ? (
-                      <Badge variant="primary" size="xs" className="px-1.5">{sql.custom_sql_down.length}</Badge>
-                    ) : null}
-                  </TabsTrigger>
+                  {SQL_SECTIONS.map((s) => (
+                    <TabsTrigger key={s.value} value={s.value} className="gap-1.5">
+                      {s.tab}
+                      <CountBadge count={s.count?.(sql)} />
+                    </TabsTrigger>
+                  ))}
                 </TabsList>
               </div>
             </div>
             <ScrollArea className="flex-1 px-4 pb-4">
               <TabsContent value="all">
                 <div className="flex flex-col gap-5">
-                  <Section title="Up()">
-                    <CodeBlock body={sql.up_body} />
-                  </Section>
-                  <Section title="Down()">
-                    <CodeBlock body={sql.down_body} />
-                  </Section>
-                  <Section title="Custom SQL Up" count={sql.custom_sql_up?.length}>
-                    <SqlList statements={sql.custom_sql_up} direction="Up()" />
-                  </Section>
-                  <Section title="Custom SQL Down" count={sql.custom_sql_down?.length}>
-                    <SqlList statements={sql.custom_sql_down} direction="Down()" />
-                  </Section>
+                  {SQL_SECTIONS.map((s) => (
+                    <Section key={s.value} title={s.title} count={s.count?.(sql)}>
+                      {s.render(sql)}
+                    </Section>
+                  ))}
                 </div>
               </TabsContent>
-              <TabsContent value="up">
-                <CodeBlock body={sql.up_body} />
-              </TabsContent>
-              <TabsContent value="down">
-                <CodeBlock body={sql.down_body} />
-              </TabsContent>
-              <TabsContent value="sql-up">
-                <SqlList statements={sql.custom_sql_up} direction="Up()" />
-              </TabsContent>
-              <TabsContent value="sql-down">
-                <SqlList statements={sql.custom_sql_down} direction="Down()" />
-              </TabsContent>
+              {SQL_SECTIONS.map((s) => (
+                <TabsContent key={s.value} value={s.value}>
+                  {s.render(sql)}
+                </TabsContent>
+              ))}
             </ScrollArea>
           </Tabs>
         )}
