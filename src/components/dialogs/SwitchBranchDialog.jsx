@@ -72,6 +72,7 @@ export function SwitchBranchDialog({ onClose }) {
   const switchBranch = useSwitchBranch();
   const fetchRemote = useFetchRemote();
   const [selected, setSelected] = React.useState("");
+  const inputRef = React.useRef(null);
 
   const locals = React.useMemo(
     () => branches.filter((b) => !b.isRemote),
@@ -93,7 +94,15 @@ export function SwitchBranchDialog({ onClose }) {
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="!flex !flex-col !w-[min(28rem,calc(100vw-2rem))] !max-w-none !max-h-[calc(100vh-2rem)] p-0 gap-0 overflow-hidden">
+      <DialogContent
+        className="!flex !flex-col !w-[min(28rem,calc(100vw-2rem))] !max-w-none !max-h-[calc(100vh-2rem)] p-0 gap-0 overflow-hidden"
+        onOpenAutoFocus={(e) => {
+          // Land focus in the branch filter (not the Fetch button Radix would
+          // pick by default) so the list is arrow-navigable immediately.
+          e.preventDefault();
+          inputRef.current?.focus();
+        }}
+      >
         <DialogHeader className="shrink-0 px-5 pt-5 pb-2 pr-12">
           <DialogTitle>Switch branch</DialogTitle>
           <DialogDescription className="text-sm leading-relaxed text-foreground/80">
@@ -105,8 +114,9 @@ export function SwitchBranchDialog({ onClose }) {
         <form
           onSubmit={onSubmit}
           onKeyDown={(e) => {
-            // ⌘/Ctrl+Enter confirms the highlighted branch from anywhere in
-            // the dialog (the command list owns plain Enter for selection).
+            // ⌘/Ctrl+Enter confirms from anywhere in the dialog (e.g. while
+            // focus is on the Fetch button); plain Enter is handled inside the
+            // command list below.
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onSubmit(e);
           }}
           className="flex flex-col min-h-0"
@@ -132,8 +142,22 @@ export function SwitchBranchDialog({ onClose }) {
           </div>
 
           <div className="min-h-0 flex flex-col border-y border-border bg-popover">
-            <Command className="min-h-0 rounded-none border-0 bg-transparent">
-              <CommandInput placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
+            <Command
+              value={selected}
+              onValueChange={setSelected}
+              onKeyDown={(e) => {
+                // cmdk calls this before its own Enter handling and skips that
+                // handling if we preventDefault. So plain Enter switches to the
+                // highlighted branch, while leaving mouse-click selection
+                // (CommandItem.onSelect) as a deliberate two-step.
+                if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+                  e.preventDefault();
+                  onSubmit(e);
+                }
+              }}
+              className="min-h-0 rounded-none border-0 bg-transparent"
+            >
+              <CommandInput ref={inputRef} placeholder={isLoading ? "Loading branches…" : "Search branches..."} disabled={isLoading} />
               <CommandList className="max-h-[clamp(200px,42vh,360px)]">
                 <CommandEmpty>No matching branches.</CommandEmpty>
                 {locals.length > 0 && (
