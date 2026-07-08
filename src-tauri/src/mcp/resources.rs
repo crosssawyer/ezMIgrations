@@ -119,9 +119,7 @@ pub fn read_app_status(state: &AppState) -> Result<String, String> {
             Some(b)
         }
     };
-    let operation_in_progress = state
-        .op_cancel
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let operation_in_progress = state.op_cancel.load(std::sync::atomic::Ordering::SeqCst);
     let watchers_active = WatchersStatus {
         branch: *state.watching.lock().unwrap(),
         migrations: *state.watching_migrations.lock().unwrap(),
@@ -148,4 +146,3 @@ pub fn parse_migration_sql_uri(uri: &str) -> Option<&str> {
     }
     Some(name)
 }
-

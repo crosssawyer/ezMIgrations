@@ -520,6 +520,11 @@ pub async fn list_git_branches(state: State<'_, Arc<AppState>>) -> Result<Vec<Br
 }
 
 #[tauri::command]
+pub async fn fetch_remote(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    ops::fetch_remote(&state).await
+}
+
+#[tauri::command]
 pub async fn switch_branch_with_migrations(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -759,6 +764,12 @@ pub async fn start_migration_watcher(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::{
+        derive_project_name, enrich_ef_error, ensure_path_exists, generate_id,
+        latest_common_migration, migration_name_from_git_path, migration_name_from_path,
+        migration_names_from_files, path_relative_to_repo,
+    };
+    use std::path::PathBuf;
 
     // ─── enrich_ef_error ────────────────────────────────────────
 
@@ -828,7 +839,10 @@ mod tests {
             PathBuf::from("/p/readme.md"),
         ];
         let names = migration_names_from_files(files);
-        assert_eq!(names, vec!["20240101_A".to_string(), "20240202_B".to_string()]);
+        assert_eq!(
+            names,
+            vec!["20240101_A".to_string(), "20240202_B".to_string()]
+        );
     }
 
     // ─── latest_common_migration ────────────────────────────────
@@ -909,8 +923,7 @@ mod tests {
         let nested = repo.path().join("a").join("b");
         std::fs::create_dir_all(&nested).unwrap();
 
-        let rel =
-            path_relative_to_repo(repo.path().to_str().unwrap(), &nested).unwrap();
+        let rel = path_relative_to_repo(repo.path().to_str().unwrap(), &nested).unwrap();
         assert!(!rel.contains('\\'));
         // On both Unix and Windows the result should be a/b
         assert_eq!(rel.replace('\\', "/"), "a/b");
@@ -921,8 +934,7 @@ mod tests {
         let repo = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
 
-        let result =
-            path_relative_to_repo(repo.path().to_str().unwrap(), outside.path());
+        let result = path_relative_to_repo(repo.path().to_str().unwrap(), outside.path());
         assert!(result.is_err());
     }
 }

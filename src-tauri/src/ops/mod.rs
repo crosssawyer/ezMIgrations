@@ -152,6 +152,17 @@ pub fn migration_name_from_path(path: &Path) -> Option<String> {
         .map(ToString::to_string)
 }
 
+pub fn migration_name_from_git_path(path: &str) -> Option<String> {
+    migration_name_from_path(Path::new(path))
+}
+
+pub fn migration_names_from_files(files: Vec<PathBuf>) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|path| migration_name_from_path(path))
+        .collect()
+}
+
 /// The newest migration in `current` that also exists in `target`.
 pub fn latest_common_migration(current: &[String], target: &[String]) -> Option<String> {
     let target_names: HashSet<&str> = target.iter().map(String::as_str).collect();
@@ -229,7 +240,6 @@ pub(crate) async fn current_branch(project_path: String) -> Result<String, Strin
     .await
     .map_err(|e| e.to_string())
 }
-
 
 // ─── Submodules ─────────────────────────────────────────────────────
 //

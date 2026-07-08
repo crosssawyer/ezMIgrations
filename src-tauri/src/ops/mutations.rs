@@ -257,7 +257,10 @@ pub async fn squash_migrations(
         check_cancel(&cancel)?;
         sink.emit(
             "creating",
-            format!("{} — Creating squashed migration {new_name}…", step_prefix(3)),
+            format!(
+                "{} — Creating squashed migration {new_name}…",
+                step_prefix(3)
+            ),
         );
         let add_result = DotnetEf::add_migration(
             &config.project_path,
@@ -297,7 +300,10 @@ pub async fn squash_migrations(
         check_cancel(&cancel)?;
         sink.emit(
             "applying",
-            format!("{} — Applying squashed migration {new_name}…", step_prefix(4)),
+            format!(
+                "{} — Applying squashed migration {new_name}…",
+                step_prefix(4)
+            ),
         );
         let final_update = DotnetEf::update_database(
             &config.project_path,
@@ -548,4 +554,3 @@ pub async fn switch_branch_with_migrations(
         }
     }
 }
-

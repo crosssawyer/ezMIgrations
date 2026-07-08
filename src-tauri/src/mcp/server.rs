@@ -32,8 +32,8 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::ops::{self, ConfigStore, NoopPhaseSink};
 use crate::mcp::resources::{self, uri};
+use crate::ops::{self, ConfigStore, NoopPhaseSink};
 use crate::state::{AppState, Preferences};
 
 /// Agent-facing debrief surfaced via `ServerCapabilities::instructions`. Single
@@ -408,7 +408,9 @@ impl EzMigrationsServer {
 
     #[tool(description = "Return the current git branch of the active project.")]
     async fn get_current_branch(&self) -> Result<CallToolResult, McpError> {
-        let branch = ops::get_current_branch(&self.state).await.map_err(tool_err)?;
+        let branch = ops::get_current_branch(&self.state)
+            .await
+            .map_err(tool_err)?;
         Ok(CallToolResult::success(vec![Content::text(branch)]))
     }
 
@@ -416,7 +418,9 @@ impl EzMigrationsServer {
         description = "List local and remote git branches in the active project's repo (excluding the current branch)."
     )]
     async fn list_git_branches(&self) -> Result<CallToolResult, McpError> {
-        let branches = ops::list_git_branches(&self.state).await.map_err(tool_err)?;
+        let branches = ops::list_git_branches(&self.state)
+            .await
+            .map_err(tool_err)?;
         json_result(&branches)
     }
 
@@ -540,7 +544,8 @@ impl ServerHandler for EzMigrationsServer {
             }
         };
 
-        let body = result.map_err(|e| McpError::internal_error(e, Some(json!({ "uri": uri_str }))))?;
+        let body =
+            result.map_err(|e| McpError::internal_error(e, Some(json!({ "uri": uri_str }))))?;
 
         Ok(ReadResourceResult::new(vec![ResourceContents::text(
             body, uri_str,

@@ -78,7 +78,6 @@ pub struct AppState {
     pub op_mutex: Arc<AsyncMutex<()>>,
 }
 
-<<<<<<< HEAD
 #[cfg(test)]
 mod tests {
     use super::*;

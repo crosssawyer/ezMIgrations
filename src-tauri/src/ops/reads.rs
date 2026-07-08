@@ -137,6 +137,15 @@ pub async fn list_git_branches(state: &AppState) -> Result<Vec<BranchInfo>, Stri
     .map_err(|e| e.to_string())?
 }
 
+/// Fetch and prune all configured remotes for the active project repository.
+pub async fn fetch_remote(state: &AppState) -> Result<(), String> {
+    let project_path = require_project(state)?.project_path;
+
+    tokio::task::spawn_blocking(move || GitService::fetch(&project_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 /// Request cancellation of the in-flight operation and kill the `dotnet ef`
 /// child if one is running. Multi-step orchestration bails at its next phase.
 pub async fn cancel_running_operation(state: &AppState) -> Result<String, String> {
@@ -159,4 +168,3 @@ pub async fn get_current_branch(state: &AppState) -> Result<String, String> {
     *state.current_branch.lock().unwrap() = branch.clone();
     Ok(branch)
 }
-
