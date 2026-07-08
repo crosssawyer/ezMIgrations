@@ -104,9 +104,7 @@ fn auto_detect_startup_project(project_path: &str) -> Option<String> {
     for candidate in &candidates {
         if let Ok(content) = fs::read_to_string(candidate) {
             if content.contains("Microsoft.NET.Sdk.Web") {
-                return candidate
-                    .parent()
-                    .map(|p| p.to_string_lossy().into_owned());
+                return candidate.parent().map(|p| p.to_string_lossy().into_owned());
             }
         }
     }
@@ -154,7 +152,11 @@ impl CommandResult {
 
 impl DotnetEf {
     /// Build the Command and return a human-readable representation of it.
-    fn build_ef_command(project_path: &str, args: &[&str], startup_project: &str) -> (Command, String) {
+    fn build_ef_command(
+        project_path: &str,
+        args: &[&str],
+        startup_project: &str,
+    ) -> (Command, String) {
         let project = Path::new(project_path);
 
         // Derive the solution root (parent of the project directory) and run from there
@@ -227,7 +229,8 @@ impl DotnetEf {
         args: &[&str],
         startup_project: &str,
     ) -> Result<CommandResult, String> {
-        let (mut cmd, command_display) = Self::build_ef_command(project_path, args, startup_project);
+        let (mut cmd, command_display) =
+            Self::build_ef_command(project_path, args, startup_project);
         cmd.output()
             .map(|output| {
                 let mut result = CommandResult {
@@ -340,7 +343,8 @@ impl DotnetEf {
         startup_project: &str,
         operation: &str,
     ) -> Result<CommandResult, String> {
-        let (mut cmd, command_display) = Self::build_ef_command(project_path, args, startup_project);
+        let (mut cmd, command_display) =
+            Self::build_ef_command(project_path, args, startup_project);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 

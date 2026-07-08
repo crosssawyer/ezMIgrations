@@ -15,8 +15,7 @@ fn re_operations() -> &'static Regex {
 fn re_sql_simple() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"migrationBuilder\s*\.\s*Sql\s*\(\s*@?"((?:[^"\\]|\\.|"")*?)"\s*\)"#)
-            .unwrap()
+        Regex::new(r#"migrationBuilder\s*\.\s*Sql\s*\(\s*@?"((?:[^"\\]|\\.|"")*?)"\s*\)"#).unwrap()
     })
 }
 
@@ -129,10 +128,7 @@ impl MigrationParser {
             }
         }
 
-        Err(format!(
-            "No Migrations directory found in {}",
-            project_path
-        ))
+        Err(format!("No Migrations directory found in {}", project_path))
     }
 
     fn walk_for_migrations(dir: &Path, depth: u32) -> Option<PathBuf> {
@@ -374,13 +370,12 @@ impl MigrationParser {
 
         if let Some(m) = re.find(&content) {
             let after_sig = &content[m.end()..];
-            let brace_rel = after_sig.find('{').ok_or_else(|| {
-                format!("Could not find opening brace of {} method", method_name)
-            })?;
+            let brace_rel = after_sig
+                .find('{')
+                .ok_or_else(|| format!("Could not find opening brace of {} method", method_name))?;
             let brace_abs = m.end() + brace_rel;
-            let close_abs = Self::find_matching_brace(&content, brace_abs).ok_or_else(|| {
-                format!("Could not find closing brace of {} method", method_name)
-            })?;
+            let close_abs = Self::find_matching_brace(&content, brace_abs)
+                .ok_or_else(|| format!("Could not find closing brace of {} method", method_name))?;
 
             let mut injected_sql = String::new();
             for sql in sql_statements {
@@ -467,7 +462,10 @@ namespace MyApp.Migrations
 
     #[test]
     fn extracts_up_method_body() {
-        let content = sample_migration("            // up body marker", "            // down body marker");
+        let content = sample_migration(
+            "            // up body marker",
+            "            // down body marker",
+        );
         let body = MigrationParser::extract_method_body(&content, "Up");
         assert!(body.contains("up body marker"));
         assert!(!body.contains("down body marker"));
@@ -475,7 +473,10 @@ namespace MyApp.Migrations
 
     #[test]
     fn extracts_down_method_body() {
-        let content = sample_migration("            // up body marker", "            // down body marker");
+        let content = sample_migration(
+            "            // up body marker",
+            "            // down body marker",
+        );
         let body = MigrationParser::extract_method_body(&content, "Down");
         assert!(body.contains("down body marker"));
         assert!(!body.contains("up body marker"));
@@ -821,7 +822,10 @@ namespace MyApp.Migrations
             custom_sql_down: vec![],
             has_custom_sql: true,
         };
-        assert_eq!(parsed.sql_strings_up(), vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(
+            parsed.sql_strings_up(),
+            vec!["A".to_string(), "B".to_string()]
+        );
         assert!(parsed.sql_strings_down().is_empty());
     }
 }

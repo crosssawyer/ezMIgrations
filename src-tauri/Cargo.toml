@@ -9,6 +9,13 @@ edition = "2021"
 name = "ez_migrations_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Headless MCP server binary. Same in-process MCP code path the GUI runs in
+# `setup()`, just without the Tauri window — for CI runs, automated agents,
+# or machines where the desktop app isn't installed.
+[[bin]]
+name = "ezmigrations-mcp"
+path = "src/bin/ezmigrations-mcp.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -19,7 +26,16 @@ serde_json = "1"
 regex = "1"
 notify = "6"
 tauri-plugin-dialog = "2.7"
-tokio = { version = "1", features = ["rt"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "net", "macros", "signal"] }
+
+# MCP server: exposes the Tauri command surface to AI agents over loopback HTTP.
+rmcp = { version = "1.7", features = ["server", "macros", "transport-streamable-http-server"] }
+# Must track the schemars major version rmcp re-exports (`rmcp::schemars`) so
+# `#[derive(JsonSchema)]` on shared types (e.g. `state::Preferences`) satisfies
+# the `Parameters<T>` bound on MCP tools.
+axum = "0.8"
+schemars = "1"
+dirs = "5"
 
 [dev-dependencies]
 tempfile = "3"

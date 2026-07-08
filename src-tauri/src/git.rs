@@ -96,11 +96,7 @@ impl GitService {
 
         let mut result: Vec<(String, bool)> = Vec::with_capacity(locals.len() + remotes.len());
         result.extend(locals.into_iter().map(|n| (n, false)));
-        result.extend(
-            remotes
-                .into_iter()
-                .map(|n| (n, true)),
-        );
+        result.extend(remotes.into_iter().map(|n| (n, true)));
         Ok(result)
     }
 
@@ -281,9 +277,6 @@ mod tests {
 
     #[test]
     fn local_name_returns_input_when_no_slash() {
-        assert_eq!(
-            GitService::local_name_from_remote_branch("main"),
-            "main"
-        );
+        assert_eq!(GitService::local_name_from_remote_branch("main"), "main");
     }
 }
