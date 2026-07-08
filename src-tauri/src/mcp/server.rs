@@ -32,14 +32,10 @@ use rmcp::{
 use serde::Deserialize;
 use serde_json::json;
 
+use super::instructions::INSTRUCTIONS;
 use crate::mcp::resources::{self, uri};
 use crate::ops::{self, ConfigStore, NoopPhaseSink};
 use crate::state::{AppState, Preferences};
-
-/// Agent-facing debrief surfaced via `ServerCapabilities::instructions`. Single
-/// source of truth in `docs/agent-debrief.md` so it can also be pasted into an
-/// agent's system prompt before the MCP connection exists.
-const INSTRUCTIONS: &str = include_str!("../../../docs/agent-debrief.md");
 
 /// Path the MCP service is nested at; the port file advertises
 /// `http://127.0.0.1:<port>/mcp` as its `url`.

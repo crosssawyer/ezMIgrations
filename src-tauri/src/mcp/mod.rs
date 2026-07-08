@@ -7,6 +7,7 @@
 //! `Arc<AppState>` as the Tauri command handlers, so MCP tool calls hit the
 //! exact same code paths as the GUI.
 
+mod instructions;
 mod resources;
 mod server;
 

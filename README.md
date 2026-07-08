@@ -83,9 +83,7 @@ Point any MCP client at the live port — read it from `mcp-port.json` after sta
 }
 ```
 
-**Quick agent debrief:** To brief an AI agent on what ezMigrations does before it connects to MCP, copy [docs/agent-debrief.md](docs/agent-debrief.md) into the agent's system prompt or first message.
-
-See [docs/mcp.md](docs/mcp.md) for the platform-specific port file path, a worked Claude Code example, and the full agent integration guide.
+See [docs/mcp.md](docs/mcp.md) for the platform-specific port file path, a worked Claude Code example, and the agent integration guide.
 
 ## Install
 

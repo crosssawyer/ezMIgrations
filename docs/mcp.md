@@ -71,15 +71,13 @@ required for typical use.
 
 Behavioural differences from the GUI-hosted server:
 
-- **Empty starting state.** The headless process can't read
-  `app_config.json` (it has no `AppHandle::path()`), so the saved-project
-  list starts empty. Use `set_project` to point at a project for the
-  session, or have the user run the GUI once to seed the config.
+- **Separate config store.** The GUI-hosted server persists through the
+  desktop app's bundle-scoped config path. The headless server persists its
+  own saved projects and preferences under `ezmigrations/app_config.json` in
+  the platform data directory.
 - **No event bus.** The Tauri IPC channel doesn't exist, so
   `start_branch_watcher` and `start_migration_watcher` report status
   without delivering events to MCP clients.
-- **No GUI flush.** Configuration mutations stay in memory for the life of
-  the process and are dropped on exit.
 
 Build it with `cargo build --release --bin ezmigrations-mcp` (or any
 `cargo build` that walks the whole workspace) — the artefact lands under
@@ -101,10 +99,9 @@ The general flow:
 1. Read the port file and parse the `url` field.
 2. Connect a streamable-HTTP MCP client to that URL.
 3. The server's `initialize` response includes a multi-paragraph
-   `instructions` field describing the tool surface and state model. Most
-   agents fold those instructions into their system prompt automatically.
-   The same content can be pasted into an agent's system prompt before
-   connection — see [agent-debrief.md](./agent-debrief.md).
+   `instructions` field describing operating constraints. The callable
+   actions and schemas come from MCP tool discovery; read-only snapshots come
+   from MCP resource discovery.
 
 ### Claude Code
 
