@@ -4,6 +4,7 @@ version = "1.2.0"
 description = "A lightweight Tauri app for managing .NET EF Core migrations"
 authors = ["ezMigrations"]
 edition = "2021"
+default-run = "ez-migrations"
 
 [lib]
 name = "ez_migrations_lib"

@@ -300,6 +300,42 @@ export function useSetPreferences() {
   });
 }
 
+export function useStartMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => invoke("start_mcp_server"),
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.mcpStatus, status);
+      toast.success("MCP server started");
+    },
+    onError: errToast("Failed to start MCP server"),
+  });
+}
+
+export function useStopMcpServer() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => invoke("stop_mcp_server"),
+    onSuccess: (status) => {
+      qc.setQueryData(queryKeys.mcpStatus, status);
+      toast("MCP server stopped");
+    },
+    onError: errToast("Failed to stop MCP server"),
+  });
+}
+
+export function useOpenMcpTerminal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ terminal = "system" } = {}) => invoke("open_mcp_terminal", { terminal }),
+    onSuccess: (msg) => {
+      qc.invalidateQueries({ queryKey: queryKeys.mcpStatus });
+      toast.success(msg);
+    },
+    onError: errToast("Failed to open MCP terminal"),
+  });
+}
+
 export function useCancelOperation() {
   return useMutation({
     mutationFn: () => invoke("cancel_running_operation"),

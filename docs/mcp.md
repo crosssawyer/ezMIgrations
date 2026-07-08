@@ -12,6 +12,10 @@ GUI for headless contexts; see [Headless mode](#headless-mode).
 
 - The server starts automatically when ezMigrations launches and stops with
   the app.
+- The header MCP control shows live status, can start/stop the server, copies
+  the advertised URL, and opens a terminal in the active repo with
+  `EZMIGRATIONS_MCP_URL`, `EZMIGRATIONS_MCP_PORT_FILE`, and
+  `EZMIGRATIONS_PROJECT_PATH` preloaded.
 - Transport: Streamable HTTP (the `2025-03-26` MCP transport).
 - Bind: `127.0.0.1:<random-port>`. Loopback-only; never exposed on the LAN.
 - Route: the MCP service is mounted at `/mcp`. The full base URL is

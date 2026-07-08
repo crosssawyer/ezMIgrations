@@ -5,6 +5,7 @@ import { Settings, RefreshCw, HelpCircle, GitBranch } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
+import { McpControl } from "@/components/McpControl";
 import { useMigrations, useCurrentBranch, queryKeys } from "@/lib/queries";
 import { useUI } from "@/lib/ui-store";
 import { cn } from "@/lib/utils";
@@ -74,6 +75,7 @@ export function Header({ project }) {
             {branch}
           </Badge>
         )}
+        <McpControl project={project} />
         <TooltipIconButton tooltip="Keyboard shortcuts (?)" onClick={() => ui.setHotkeysOpen(true)}>
           <HelpCircle className="h-3.5 w-3.5" />
         </TooltipIconButton>

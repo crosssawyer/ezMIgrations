@@ -38,6 +38,8 @@ ezMigrations wraps `dotnet ef` in a focused UI that understands your git branche
 
 ezMigrations ships an embedded MCP (Model Context Protocol) server so AI agents can drive the same workflows the GUI offers. While the desktop app is running it exposes all 23 backend commands as MCP tools plus 8 read-only state resources over loopback HTTP. The server advertises its port in a per-user `mcp-port.json` file under the OS app-data directory; the JSON includes the full `http://127.0.0.1:<port>/mcp` URL to feed to any streamable-HTTP MCP client. No authentication — the listener is loopback-only.
 
+The header MCP control shows whether the server is up, can turn it on or off, copies the live URL, and opens a terminal in the active repo with `EZMIGRATIONS_MCP_URL` and related environment variables preloaded.
+
 See [docs/mcp.md](docs/mcp.md) for the full integration guide, the tool / resource catalog, and troubleshooting notes.
 
 ## Using ezMigrations

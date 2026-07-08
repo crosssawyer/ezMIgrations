@@ -11,11 +11,13 @@ pub mod ops;
 mod parser;
 mod process;
 pub mod state;
+mod terminal;
 
 use std::sync::Arc;
 
 use commands::TauriConfigStore;
 use state::AppState;
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +30,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::CloseRequested { .. }) {
+                let state = window.state::<Arc<AppState>>();
+                mcp::cleanup_managed_mcp_server(state.inner().as_ref());
+            }
+        })
         .setup(move |app| {
             // The MCP server shares the GUI's persistence: tool calls that
             // mutate the saved-project list write to the same bundle-scoped
@@ -40,9 +48,13 @@ pub fn run() {
             // block startup. Bind failures are logged but non-fatal to the
             // GUI — the user can still drive the app manually.
             tauri::async_runtime::spawn(async move {
-                match mcp::start_mcp_server(mcp_state, store).await {
-                    Ok(port) => {
-                        eprintln!("MCP server listening on http://127.0.0.1:{}/mcp", port);
+                match mcp::start_managed_mcp_server(mcp_state, store).await {
+                    Ok(status) => {
+                        if let Some(url) = status.url {
+                            eprintln!("MCP server listening on {}", url);
+                        } else {
+                            eprintln!("MCP server status is stopped after startup");
+                        }
                     }
                     Err(e) => {
                         eprintln!("MCP server failed to start: {}", e);
@@ -77,6 +89,10 @@ pub fn run() {
             commands::start_migration_watcher,
             commands::get_preferences,
             commands::set_preferences,
+            commands::get_mcp_status,
+            commands::start_mcp_server,
+            commands::stop_mcp_server,
+            commands::open_mcp_terminal,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -9,6 +9,7 @@ export const queryKeys = {
   currentBranch: ["current-branch"],
   savedProjects: ["saved-projects"],
   preferences: ["preferences"],
+  mcpStatus: ["mcp-status"],
 };
 
 export function useProject() {
@@ -66,5 +67,14 @@ export function usePreferences() {
     queryKey: queryKeys.preferences,
     queryFn: () => invoke("get_preferences").catch(() => ({ notify_on_branch_change: true })),
     staleTime: Infinity,
+  });
+}
+
+export function useMcpStatus() {
+  return useQuery({
+    queryKey: queryKeys.mcpStatus,
+    queryFn: () => invoke("get_mcp_status"),
+    staleTime: 1_000,
+    refetchInterval: 5_000,
   });
 }
