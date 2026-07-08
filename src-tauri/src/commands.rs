@@ -1,7 +1,9 @@
 use crate::git::GitService;
+use crate::mcp;
 use crate::ops::{self, BranchInfo, BranchSwitchResult, MigrationSqlInfo, PhaseSink, ProjectInfo};
 use crate::parser::MigrationParser;
 use crate::state::{AppConfig, AppState, Migration, Preferences, ProjectConfig, SavedProject};
+use crate::terminal::{open_terminal, TerminalContext};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::Path;
@@ -432,6 +434,69 @@ pub async fn set_preferences(
 ) -> Result<(), String> {
     let store = TauriConfigStore::new(app.clone());
     ops::set_preferences(&state, &store, preferences)
+}
+
+// ─── MCP Commands ───────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn get_mcp_status(
+    state: State<'_, Arc<AppState>>,
+) -> Result<mcp::McpServerStatus, String> {
+    Ok(mcp::managed_mcp_status(state.inner().as_ref()))
+}
+
+#[tauri::command]
+pub async fn start_mcp_server(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+) -> Result<mcp::McpServerStatus, String> {
+    let store: Arc<dyn ops::ConfigStore> = Arc::new(TauriConfigStore::new(app));
+    mcp::start_managed_mcp_server(state.inner().clone(), store)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn stop_mcp_server(
+    state: State<'_, Arc<AppState>>,
+) -> Result<mcp::McpServerStatus, String> {
+    Ok(mcp::stop_managed_mcp_server(state.inner().clone()).await)
+}
+
+#[tauri::command]
+pub async fn open_mcp_terminal(
+    app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    terminal: Option<String>,
+) -> Result<String, String> {
+    let config = {
+        let guard = state.config.lock().unwrap();
+        guard.as_ref().ok_or("No project configured")?.clone()
+    };
+
+    let store: Arc<dyn ops::ConfigStore> = Arc::new(TauriConfigStore::new(app));
+    let status = mcp::start_managed_mcp_server(state.inner().clone(), store)
+        .await
+        .map_err(|e| e.to_string())?;
+    let mcp_url = status.url.ok_or("MCP server is not running")?;
+
+    let project_path_for_git = config.project_path.clone();
+    let repo_path = tokio::task::spawn_blocking(move || {
+        GitService::get_repo_root(&project_path_for_git).unwrap_or(project_path_for_git)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let terminal = terminal.unwrap_or_else(|| "system".to_string());
+    let context = TerminalContext {
+        repo_path: &repo_path,
+        project_path: &config.project_path,
+        mcp_url: &mcp_url,
+        port_file_path: &status.port_file_path,
+    };
+    let label = open_terminal(&terminal, &context)?;
+
+    Ok(format!("Opened {label} in {repo_path}"))
 }
 
 // ─── Migration Commands ─────────────────────────────────────────────

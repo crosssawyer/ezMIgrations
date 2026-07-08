@@ -1,8 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{oneshot, Mutex as AsyncMutex};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -59,6 +59,14 @@ pub struct Migration {
     pub file_path: Option<String>,
 }
 
+pub struct McpServerRuntime {
+    pub generation: u64,
+    pub port: u16,
+    pub url: String,
+    pub started_at_unix_ms: u64,
+    pub shutdown: Option<oneshot::Sender<()>>,
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub config: Mutex<Option<ProjectConfig>>,
@@ -76,6 +84,9 @@ pub struct AppState {
     /// server can't stomp on each other. Async-aware so async tool handlers
     /// don't block a tokio worker thread while they wait.
     pub op_mutex: Arc<AsyncMutex<()>>,
+    pub mcp_server: Mutex<Option<McpServerRuntime>>,
+    pub mcp_lifecycle: Arc<AsyncMutex<()>>,
+    pub mcp_generation: AtomicU64,
 }
 
 #[cfg(test)]
